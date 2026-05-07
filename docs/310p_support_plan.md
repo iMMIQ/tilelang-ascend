@@ -492,6 +492,10 @@ python3 tilelang/tools/ascend310p_stage4_camodel.py \
 
 ### Stage 5: Developer Mode and Automatic Passes
 
+Status: complete for 310P developer-mode lower/compile coverage; runtime
+correctness is limited by the Stage 4 optimized cube blocker and missing
+`torch_npu`.
+
 Directories:
 
 - `examples/developer_mode`
@@ -512,6 +516,48 @@ Exit criteria:
 
 - Developer-mode generated Ascend C is legal for 310P.
 - Autotune/carver can select or restrict configs that fit 310P memory limits.
+
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage5_camodel.py`, a reusable Stage 5
+  harness for 310P developer-mode and automatic-pass coverage.
+- The harness exercises the automatic pass set:
+  - `TL_ASCEND_AUTO_SYNC`
+  - `TL_ASCEND_MEMORY_PLANNING`
+  - `TL_ASCEND_AUTO_CV_COMBINE`
+  - `TL_ASCEND_AUTO_CV_SYNC`
+- Added compile coverage for representative Stage 5 patterns:
+  - `developer_gelu_mul`: Developer-mode shared-buffer vector expression
+    lowering.
+  - `developer_gemm`: Developer-mode `alloc_shared` / `alloc_fragment` GEMM
+    lowering.
+  - `blocksparse_gemm`: masked block GEMM lowering with automatic pass
+    coverage.
+- Added a 310P carver check entry point. On this machine it records an explicit
+  skip because importing the carver stack requires `torch_npu`, which is not
+  installed.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile tilelang/tools/ascend310p_stage5_camodel.py
+
+python3 tilelang/tools/ascend310p_stage5_camodel.py \
+  --work-dir debug_310p_stage5_compile_all \
+  --compile-all-default \
+  --timeout 90
+```
+
+Notes:
+
+- Stage 5 currently claims lower/compile legality, not full runtime correctness
+  for cube-heavy developer examples. Generated developer GEMM still inherits
+  the Stage 4 optimized `T.gemm_v0` cube CAModel blocker.
+- Runtime JIT execution of the original Stage 5 example scripts is still gated
+  by missing `torch_npu`.
+- Quantized batch matmul and grouped GEMM remain follow-up compile/runtime
+  coverage because they combine cube, workspace, pointer/metadata, and
+  cross-scope paths that depend on later Stage 6 and Stage 8 closure.
 
 ### Stage 6: Fusion, Pipeline, and Cross-Scope Sync
 
