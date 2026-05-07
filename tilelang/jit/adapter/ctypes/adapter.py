@@ -50,6 +50,7 @@ class CtypesKernelAdapter(BaseKernelAdapter):
                  host_mod: Optional[tvm.IRModule] = None,
                  device_mod: Optional[tvm.IRModule] = None,
                  kernel_global_source: Optional[str] = None,
+                 platform: str = "auto",
                  verbose: bool = False,
                  pass_configs: Optional[Dict[str, Any]] = None):
         """Initialize the adapter with the given TIR function or module.
@@ -89,7 +90,7 @@ class CtypesKernelAdapter(BaseKernelAdapter):
         self.target = Target.canon_target(determine_target(target))
         self.verbose = verbose
         self.wrapper = TLWrapper(self.target)
-        self.lib_generator = LibraryGenerator(self.target)
+        self.lib_generator = LibraryGenerator(target, platform)
 
         self.wrapper.assign_optimized_module(self.ir_module)
         self.wrapper.assign_pass_configs(pass_configs)
@@ -109,6 +110,7 @@ class CtypesKernelAdapter(BaseKernelAdapter):
                       params: List[TensorType],
                       result_idx: List[int],
                       target: str,
+                      platform: str,
                       func_or_mod: Union[tir.PrimFunc, tvm.IRModule],
                       kernel_global_source: str,
                       kernel_lib_path: str,
@@ -144,7 +146,7 @@ class CtypesKernelAdapter(BaseKernelAdapter):
 
         adapter.target = Target.canon_target(determine_target(target))
         adapter.verbose = verbose
-        adapter.lib_generator = LibraryGenerator(adapter.target)
+        adapter.lib_generator = LibraryGenerator(target, platform)
         adapter.lib = adapter.lib_generator.load_lib(lib_path=kernel_lib_path)
         adapter.lib.init()
 

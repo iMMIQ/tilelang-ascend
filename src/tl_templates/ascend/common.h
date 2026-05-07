@@ -1,3 +1,13 @@
+#if defined(TL_ASCEND_310P) && !defined(TL_ASCEND_BFLOAT16_T_DEFINED)
+#define TL_ASCEND_BFLOAT16_T_DEFINED
+struct alignas(2) bfloat16_t {
+  uint16_t raw;
+  bfloat16_t() = default;
+  explicit bfloat16_t(float value) : raw(static_cast<uint16_t>(value)) {}
+  explicit operator float() const { return static_cast<float>(raw); }
+};
+#endif
+
 // clang-format off
 #include "catlass/catlass.hpp"
 #include "catlass/arch/arch.hpp"
@@ -14,7 +24,9 @@
 #endif
 #endif
 
+#if !defined(TL_ASCEND_310P)
 #include "shmem.h"
+#endif
 
 #define CUDART_INF_F 1.0f / 0.0f
 
@@ -353,6 +365,7 @@ CATLASS_DEVICE void shmem_ub_get_nbi(const LocalTensor<T> &output,
                         const_cast<__gm__ T *>(input.GetPhyAddr()), nelems,
                         newPe, EVENT_ID0);
 }
+#endif  // !defined(TL_ASCEND_310P)
 
 template <typename T, uint32_t Len, uint32_t op>
 CATLASS_DEVICE void elementwise_unary(LocalTensor<T> const &ubIn,
