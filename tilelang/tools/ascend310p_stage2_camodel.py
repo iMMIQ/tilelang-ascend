@@ -28,8 +28,8 @@ DTYPE_TO_NUMPY = {
 
 DTYPE_TO_ASCENDEBUG = {
     "float16": "float16",
-    "float32": "float",
-    "float": "float",
+    "float32": "float32",
+    "float": "float32",
     "int32": "int32",
 }
 
