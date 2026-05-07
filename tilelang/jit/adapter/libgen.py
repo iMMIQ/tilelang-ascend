@@ -8,6 +8,7 @@ import tempfile
 import subprocess
 import logging
 from tilelang.env import TILELANG_TEMPLATE_PATH, TILELANG_PACKAGE_PATH
+from tilelang.jit.adapter.ascend_platform import get_ascend_platform_spec
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,12 @@ def _get_tl_root() -> str:
     """Get TL_ROOT path, fallback to package path if not set."""
     tl_root = os.environ.get("TL_ROOT")
     if tl_root is None:
-        tl_root = str(TILELANG_PACKAGE_PATH)
+        package_path = str(TILELANG_PACKAGE_PATH)
+        package_parent = os.path.dirname(package_path)
+        if os.path.exists(os.path.join(package_path, "3rdparty")):
+            tl_root = package_path
+        else:
+            tl_root = package_parent
     return tl_root
 
 
@@ -59,10 +65,11 @@ class LibraryGenerator:
         libpath = src.name.replace(".cpp", ".so")
         ASCEND_HOME_PATH = _get_ascend_home_path()
         TL_ROOT = _get_tl_root()
+        platform_spec = get_ascend_platform_spec(self.platform)
         if self.target == "ascendc" or self.target == "auto":
             command = [
                 "bisheng",
-                "--npu-arch=dav-2201",
+                f"--npu-arch={platform_spec.npu_arch}",
                 "-O2",
                 "-std=c++17",
                 "-xasc",
@@ -93,25 +100,13 @@ class LibraryGenerator:
                 src.name,
             ]
         elif self.target == "pto":
-            ccec = "dav-c310" if self.platform == "A5" else "dav-c220"
-            memory = "REGISTER_BASE" if self.platform == "A5" else "MEMORY_BASE"
             command = [
                 "bisheng",
-                f"--cce-aicore-arch={ccec}",
-                f"-D{memory}",
+                f"--cce-aicore-arch={platform_spec.ccec_arch}",
+                f"-D{platform_spec.memory_model}",
                 "-O2",
                 "-std=gnu++17",
                 "-xcce",
-                "-mllvm",
-                "-cce-aicore-stack-size=0x8000",
-                "-mllvm",
-                "-cce-aicore-function-stack-size=0x8000",
-                "-mllvm",
-                "-cce-aicore-record-overflow=true",
-                "-mllvm",
-                "-cce-aicore-addr-transform",
-                "-mllvm",
-                "-cce-aicore-dcci-insert-for-scalar=false",
                 "-DL2_CACHE_HINT",
                 "-I../../src/",
                 f"-I{TL_ROOT}/3rdparty/pto-isa/include",
@@ -138,6 +133,19 @@ class LibraryGenerator:
                 "--shared",
                 src.name,
             ]
+            if platform_spec.canonical != "310P":
+                command[7:7] = [
+                    "-mllvm",
+                    "-cce-aicore-stack-size=0x8000",
+                    "-mllvm",
+                    "-cce-aicore-function-stack-size=0x8000",
+                    "-mllvm",
+                    "-cce-aicore-record-overflow=true",
+                    "-mllvm",
+                    "-cce-aicore-addr-transform",
+                    "-mllvm",
+                    "-cce-aicore-dcci-insert-for-scalar=false",
+                ]
         command += ["-o", libpath]
 
         src.write(self.lib_code)

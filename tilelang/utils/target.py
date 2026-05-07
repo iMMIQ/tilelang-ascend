@@ -6,6 +6,7 @@ from tilelang import tvm as tvm
 from tvm.target import Target
 from tvm.contrib import rocm
 from tilelang.contrib import nvcc
+from tilelang.jit.adapter.ascend_platform import normalize_ascend_platform
 
 AVALIABLE_TARGETS = {
     "auto",
@@ -118,7 +119,7 @@ def determine_platform(platform: str = "auto") -> str:
         str: The selected platform ("A3", "A2", etc.).
     """
     if platform != "auto":
-        return platform
+        return normalize_ascend_platform(platform)
 
     # Detect platform based on NPU device properties
     try:
@@ -128,7 +129,9 @@ def determine_platform(platform: str = "auto") -> str:
             props = torch.npu.get_device_properties(torch.npu.current_device())
             name = props.name.upper()
 
-            if "910B" in name:
+            if "310P" in name:
+                return "310P"
+            elif "910B" in name:
                 return "A2"
             elif "910_93" in name:
                 return "A3"

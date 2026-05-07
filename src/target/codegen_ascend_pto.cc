@@ -2527,10 +2527,16 @@ void CodeGenTileLangAscendPto::VisitStmt_(const AttrStmtNode *op) {
   } else if (op->attr_key == "resource_scope") { // other core
     auto resource_id = Downcast<IntImm>(op->value)->value;
     auto resource_name = resource_id == 0 ? "CUBE" : "VEC";
-    std::string arch_name = (this->platform_ == "A5") ? "C310" : "C220";
+    std::string resource_guard;
+    if (this->platform_ == "A5") {
+      resource_guard = "__DAV_C310__";
+    } else if (this->platform_ == "310P") {
+      resource_guard = "__DAV_M200__";
+    } else {
+      resource_guard = std::string("__DAV_C220_") + resource_name + "__";
+    }
 
-    stream << "#if defined(__DAV_" << arch_name << "_" << resource_name
-           << "__)\n";
+    stream << "#if defined(" << resource_guard << ")\n";
     if (resource_name == "VEC") {
       this->PrintIndent();
       stream << "  set_mask_norm();\n";

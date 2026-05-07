@@ -38,6 +38,12 @@ namespace codegen {
 #define ASCEND_A5_L0C_SIZE (262144)
 #define ASCEND_A5_UB_SIZE (262144)
 
+#define ASCEND_310P_L0A_SIZE (ASCEND_A2A3_L0A_SIZE)
+#define ASCEND_310P_L0B_SIZE (ASCEND_A2A3_L0B_SIZE)
+#define ASCEND_310P_L1_SIZE (1048576)
+#define ASCEND_310P_L0C_SIZE (262144)
+#define ASCEND_310P_UB_SIZE (262144)
+
 std::string getType(const DataType &dtype) {
   if (dtype.is_float16()) {
     return "half";
@@ -97,6 +103,9 @@ void CodeGenTileLangAscend::PrintFuncPrefix(std::ostream &os) {
 }
 
 std::string CodeGenTileLangAscend::Finish() {
+  if (platform_ == "310P") {
+    decl_stream << "#define TL_ASCEND_310P 1\n";
+  }
   decl_stream << "#include \"tl_templates/ascend/common.h\"\n";
   decl_stream << "#include \"acl/acl.h\"\n";
   decl_stream << "#include <runtime/rt_ffts.h>\n";
@@ -909,6 +918,12 @@ void CodeGenTileLangAscend::PreFunctionBody(const PrimFunc &f) {
     l1_size = ASCEND_A5_L1_SIZE;
     l0c_size = ASCEND_A5_L0C_SIZE;
     ub_size = ASCEND_A5_UB_SIZE;
+  } else if (this->platform_ == "310P") {
+    l0a_size = ASCEND_310P_L0A_SIZE;
+    l0b_size = ASCEND_310P_L0B_SIZE;
+    l1_size = ASCEND_310P_L1_SIZE;
+    l0c_size = ASCEND_310P_L0C_SIZE;
+    ub_size = ASCEND_310P_UB_SIZE;
   } else {
     // A2 / A3
     l0a_size = ASCEND_A2A3_L0A_SIZE;
