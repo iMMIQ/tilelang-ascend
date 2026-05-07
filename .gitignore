@@ -80,6 +80,7 @@ build_sdist/
 
 # exclude debug testing folder
 !testing/python/debug
+debug_310p*/
 
 # ignore lib with develop mode
 tilelang/lib
