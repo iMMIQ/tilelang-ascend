@@ -234,14 +234,14 @@ copy_gm_to_ub(LocalTensor<T> dstTensor, GlobalTensor<T> srcTensor,
               uint32_t realSrcN = 1, uint32_t maskShapeM = dstM,
               uint32_t maskShapeN = dstN, T padValue = T(0)) {
 #if defined(TL_ASCEND_310P)
-  if (maskShapeM != dstM || maskShapeN != dstN) {
-    if constexpr (IsDuplicateSupported_v<T>) {
-      AscendC::Duplicate<T>(dstTensor, padValue, dstM * dstN);
+  for (uint32_t m = 0; m < dstM; ++m) {
+    for (uint32_t n = 0; n < dstN; ++n) {
+      T value = padValue;
+      if (m < maskShapeM && n < maskShapeN) {
+        value = srcTensor.GetValue(m * realSrcN + n);
+      }
+      dstTensor.SetValue(m * dstN + n, value);
     }
-  }
-  for (uint32_t m = 0; m < maskShapeM; ++m) {
-    AscendC::DataCopy(dstTensor[m * dstN], srcTensor[m * realSrcN],
-                      maskShapeN);
   }
 #else
 
@@ -277,8 +277,9 @@ copy_ub_to_gm(GlobalTensor<T> dstTensor, LocalTensor<T> srcTensor,
               uint32_t maskShapeN = srcN) {
 #if defined(TL_ASCEND_310P)
   for (uint32_t m = 0; m < maskShapeM; ++m) {
-    AscendC::DataCopy(dstTensor[m * realdstN], srcTensor[m * srcN],
-                      maskShapeN);
+    for (uint32_t n = 0; n < maskShapeN; ++n) {
+      dstTensor.SetValue(m * realdstN + n, srcTensor.GetValue(m * srcN + n));
+    }
   }
 #else
   AscendC::DataCopyExtParams dataCopyParams(
