@@ -71,6 +71,21 @@ CATLASS_DEVICE void copy_gm_to_l1(LocalTensor<T> dstTensor,
                                   uint32_t realTailN = 0) {
   uint32_t tailM = realTailM == 0 ? dstM : realTailM;
   uint32_t tailN = realTailN == 0 ? dstN : realTailN;
+#if defined(TL_ASCEND_310P)
+  for (uint32_t m = 0; m < tailM; ++m) {
+    for (uint32_t n = 0; n < tailN; ++n) {
+      dstTensor.SetValue(m * dstN + n, srcTensor.GetValue(m * realSrcN + n));
+    }
+    for (uint32_t n = tailN; n < dstN; ++n) {
+      dstTensor.SetValue(m * dstN + n, T(0));
+    }
+  }
+  for (uint32_t m = tailM; m < dstM; ++m) {
+    for (uint32_t n = 0; n < dstN; ++n) {
+      dstTensor.SetValue(m * dstN + n, T(0));
+    }
+  }
+#else
   if (tailM != dstM || tailN != dstN) {
     AscendC::InitConstValue(
         dstTensor,
@@ -89,6 +104,7 @@ CATLASS_DEVICE void copy_gm_to_l1(LocalTensor<T> dstTensor,
 
   TileCopyTla<ArchTag, decltype(src), decltype(dst)> tileCopier;
   tileCopier(dst, src);
+#endif
 }
 
 template <typename T, uint32_t srcM, uint32_t srcN, bool transpose = false>
@@ -164,6 +180,17 @@ copy_l0c_to_gm(GlobalTensor<T2> dstTensor, LocalTensor<T1> srcTensor,
                uint32_t realTailN = 0) {
   uint32_t tailM = realTailM == 0 ? srcM : realTailM;
   uint32_t tailN = realTailN == 0 ? srcN : realTailN;
+#if defined(TL_ASCEND_310P)
+  for (uint32_t m = 0; m < tailM; ++m) {
+    for (uint32_t n = 0; n < tailN; ++n) {
+      T1 value = srcTensor.GetValue(m * srcN + n);
+      if constexpr (enRelu) {
+        value = value > T1(0) ? value : T1(0);
+      }
+      dstTensor.SetValue(m * realDstN + n, static_cast<T2>(value));
+    }
+  }
+#else
   auto layoutInL0C = tla::MakeLayoutL0C(srcM, srcN);
   auto src = tla::MakeTensor<decltype(srcTensor), decltype(layoutInL0C),
                              AscendC::TPosition::CO1>(srcTensor, layoutInL0C);
@@ -179,6 +206,7 @@ copy_l0c_to_gm(GlobalTensor<T2> dstTensor, LocalTensor<T1> srcTensor,
                  ScaleGranularity::NO_QUANT, enRelu>
       tileCopier;
   tileCopier(dst, src, 0);
+#endif
 }
 
 template <uint32_t M, uint32_t N, uint32_t K, uint32_t block_M,
@@ -205,6 +233,17 @@ CATLASS_DEVICE void
 copy_gm_to_ub(LocalTensor<T> dstTensor, GlobalTensor<T> srcTensor,
               uint32_t realSrcN = 1, uint32_t maskShapeM = dstM,
               uint32_t maskShapeN = dstN, T padValue = T(0)) {
+#if defined(TL_ASCEND_310P)
+  if (maskShapeM != dstM || maskShapeN != dstN) {
+    if constexpr (IsDuplicateSupported_v<T>) {
+      AscendC::Duplicate<T>(dstTensor, padValue, dstM * dstN);
+    }
+  }
+  for (uint32_t m = 0; m < maskShapeM; ++m) {
+    AscendC::DataCopy(dstTensor[m * dstN], srcTensor[m * realSrcN],
+                      maskShapeN);
+  }
+#else
 
   bool isPad = true;
   uint32_t rightPadding = 1;
@@ -228,6 +267,7 @@ copy_gm_to_ub(LocalTensor<T> dstTensor, GlobalTensor<T> srcTensor,
       (dstN - maskShapeN) * sizeof(T) / 32, 0);
   AscendC::DataCopyPadExtParams<T> padParams(isPad, 0, rightPadding, padValue);
   AscendC::DataCopyPad(dstTensor, srcTensor, dataCopyParams, padParams);
+#endif
 }
 
 template <typename T, uint32_t srcN, uint32_t srcM = 1>
@@ -235,10 +275,17 @@ CATLASS_DEVICE void
 copy_ub_to_gm(GlobalTensor<T> dstTensor, LocalTensor<T> srcTensor,
               uint32_t realdstN = 1, uint32_t maskShapeM = srcM,
               uint32_t maskShapeN = srcN) {
+#if defined(TL_ASCEND_310P)
+  for (uint32_t m = 0; m < maskShapeM; ++m) {
+    AscendC::DataCopy(dstTensor[m * realdstN], srcTensor[m * srcN],
+                      maskShapeN);
+  }
+#else
   AscendC::DataCopyExtParams dataCopyParams(
       maskShapeM, maskShapeN * sizeof(T), (srcN - maskShapeN) * sizeof(T) / 32,
       (realdstN - maskShapeN) * sizeof(T), 0);
   AscendC::DataCopyPad(dstTensor, srcTensor, dataCopyParams);
+#endif
 }
 
 template <typename T, uint32_t srcN, uint32_t srcM = 1>
@@ -314,6 +361,7 @@ CATLASS_DEVICE void elementwise_binary(LocalTensor<T> const &ubIn0,
   }
 }
 
+#if !defined(TL_ASCEND_310P)
 template <typename T>
 CATLASS_DEVICE void shmem_put_nbi(const GlobalTensor<T> &output,
                                   const GlobalTensor<T> &input, size_t nelems,
@@ -401,6 +449,33 @@ template <typename T, uint32_t M, uint32_t N, int32_t dim>
 CATLASS_DEVICE void
 reduce_sum(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
            LocalTensor<uint8_t> const &sharedTmpBuffer, bool clear = true) {
+#if defined(TL_ASCEND_310P)
+  if (clear) {
+    constexpr uint32_t kReduceResultLen = dim == -1 ? M : N;
+    for (uint32_t i = 0; i < kReduceResultLen; ++i) {
+      dstTensor.SetValue(i, T(0));
+    }
+  }
+
+  if constexpr (dim == -1) {
+    for (uint32_t m = 0; m < M; ++m) {
+      T acc = dstTensor.GetValue(m);
+      for (uint32_t n = 0; n < N; ++n) {
+        acc = static_cast<T>(acc + srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(m, acc);
+    }
+  } else {
+    for (uint32_t n = 0; n < N; ++n) {
+      T acc = dstTensor.GetValue(n);
+      for (uint32_t m = 0; m < M; ++m) {
+        acc = static_cast<T>(acc + srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(n, acc);
+    }
+  }
+  (void)sharedTmpBuffer;
+#else
   uint32_t shape[] = {M, N};
   if (clear) {
     if constexpr (dim == -1) {
@@ -434,6 +509,7 @@ reduce_sum(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
     T reducedValue = dstTensor.GetValue(i);
     dstTensor.SetValue(i, static_cast<T>(reducedValue + dstBackup[i]));
   }
+#endif
 }
 
 template <typename T>
@@ -453,6 +529,38 @@ template <typename T, uint32_t M, uint32_t N, int32_t dim>
 CATLASS_DEVICE void
 reduce_max(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
            LocalTensor<uint8_t> const &sharedTmpBuffer, bool clear = true) {
+#if defined(TL_ASCEND_310P)
+  if (clear) {
+    if constexpr (dim == -1) {
+      for (uint32_t m = 0; m < M; ++m) {
+        dstTensor.SetValue(m, srcTensor.GetValue(m * N));
+      }
+    } else {
+      for (uint32_t n = 0; n < N; ++n) {
+        dstTensor.SetValue(n, srcTensor.GetValue(n));
+      }
+    }
+  }
+
+  if constexpr (dim == -1) {
+    for (uint32_t m = 0; m < M; ++m) {
+      T acc = dstTensor.GetValue(m);
+      for (uint32_t n = clear ? 1 : 0; n < N; ++n) {
+        acc = reduce_scalar_max_safe(acc, srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(m, acc);
+    }
+  } else {
+    for (uint32_t n = 0; n < N; ++n) {
+      T acc = dstTensor.GetValue(n);
+      for (uint32_t m = clear ? 1 : 0; m < M; ++m) {
+        acc = reduce_scalar_max_safe(acc, srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(n, acc);
+    }
+  }
+  (void)sharedTmpBuffer;
+#else
   uint32_t shape[] = {M, N};
   if (clear) {
     if constexpr (dim == -1) {
@@ -489,6 +597,7 @@ reduce_max(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
     T backupValue = dstBackup[i];
     dstTensor.SetValue(i, reduce_scalar_max_safe(reducedValue, backupValue));
   }
+#endif
 }
 
 template <typename T>
@@ -508,6 +617,38 @@ template <typename T, uint32_t M, uint32_t N, int32_t dim>
 CATLASS_DEVICE void
 reduce_min(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
            LocalTensor<uint8_t> const &sharedTmpBuffer, bool clear = true) {
+#if defined(TL_ASCEND_310P)
+  if (clear) {
+    if constexpr (dim == -1) {
+      for (uint32_t m = 0; m < M; ++m) {
+        dstTensor.SetValue(m, srcTensor.GetValue(m * N));
+      }
+    } else {
+      for (uint32_t n = 0; n < N; ++n) {
+        dstTensor.SetValue(n, srcTensor.GetValue(n));
+      }
+    }
+  }
+
+  if constexpr (dim == -1) {
+    for (uint32_t m = 0; m < M; ++m) {
+      T acc = dstTensor.GetValue(m);
+      for (uint32_t n = clear ? 1 : 0; n < N; ++n) {
+        acc = reduce_scalar_min_safe(acc, srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(m, acc);
+    }
+  } else {
+    for (uint32_t n = 0; n < N; ++n) {
+      T acc = dstTensor.GetValue(n);
+      for (uint32_t m = clear ? 1 : 0; m < M; ++m) {
+        acc = reduce_scalar_min_safe(acc, srcTensor.GetValue(m * N + n));
+      }
+      dstTensor.SetValue(n, acc);
+    }
+  }
+  (void)sharedTmpBuffer;
+#else
   uint32_t shape[] = {M, N};
   if (clear) {
     if constexpr (dim == -1) {
@@ -544,6 +685,7 @@ reduce_min(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
     T backupValue = dstBackup[i];
     dstTensor.SetValue(i, reduce_scalar_min_safe(reducedValue, backupValue));
   }
+#endif
 }
 
 static constexpr uint32_t L0AB_EVENT = 0;
@@ -555,6 +697,22 @@ gemm_v0(LocalTensor<T1> const &A, LocalTensor<T1> const &B,
         LocalTensor<T2> const &C, // this must be located in l0c
         AscendC::TBuf<AscendC::TPosition::A2> &l0a_,
         AscendC::TBuf<AscendC::TPosition::B2> &l0b_, bool clear) {
+#if defined(TL_ASCEND_310P)
+  for (uint32_t m = 0; m < M; ++m) {
+    for (uint32_t n = 0; n < N; ++n) {
+      T2 acc = clear ? T2(0) : C.GetValue(m * N + n);
+      for (uint32_t k = 0; k < K; ++k) {
+        T1 aValue = A.GetValue(transpose_A ? k * M + m : m * K + k);
+        T1 bValue = B.GetValue(transpose_B ? n * K + k : k * N + n);
+        acc = static_cast<T2>(acc + static_cast<T2>(aValue) *
+                                      static_cast<T2>(bValue));
+      }
+      C.SetValue(m * N + n, acc);
+    }
+  }
+  (void)l0a_;
+  (void)l0b_;
+#else
   auto l0a = l0a_.Get<T1>();
   auto l0b = l0b_.Get<T1>();
   constexpr uint32_t kL0Size = 128;
@@ -607,6 +765,7 @@ gemm_v0(LocalTensor<T1> const &A, LocalTensor<T1> const &B,
   WaitFlag<HardEvent::MTE1_MTE2>(L0AB_EVENT);
   SetFlag<HardEvent::M_FIX>(L0AB_EVENT);
   WaitFlag<HardEvent::M_FIX>(L0AB_EVENT);
+#endif
 }
 
 // 2-way merge sort
@@ -831,8 +990,28 @@ CATLASS_DEVICE void
 Broadcast(const LocalTensor<T> &dst, const LocalTensor<T> &src,
           LocalTensor<uint8_t> &sharedTmpBuffer, const uint32_t dstShape[dim],
           const uint32_t srcShape[dim]) {
+#if defined(TL_ASCEND_310P)
+  if constexpr (dim == 1) {
+    for (uint32_t i = 0; i < dstShape[0]; ++i) {
+      dst.SetValue(i, src.GetValue(i % srcShape[0]));
+    }
+  } else if constexpr (dim == 2) {
+    for (uint32_t i = 0; i < dstShape[0]; ++i) {
+      for (uint32_t j = 0; j < dstShape[1]; ++j) {
+        uint32_t srcI = srcShape[0] == 1 ? 0 : i;
+        uint32_t srcJ = srcShape[1] == 1 ? 0 : j;
+        dst.SetValue(i * dstShape[1] + j,
+                     src.GetValue(srcI * srcShape[1] + srcJ));
+      }
+    }
+  }
+  (void)sharedTmpBuffer;
+  (void)axis;
+  (void)isReuseSource;
+#else
   AscendC::Broadcast<T, dim, axis, isReuseSource>(dst, src, dstShape, srcShape,
                                                   sharedTmpBuffer);
+#endif
 }
 
 template <typename T>

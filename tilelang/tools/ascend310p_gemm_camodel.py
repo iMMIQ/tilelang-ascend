@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -141,11 +142,42 @@ def _write_kernel(path: Path, m: int, n: int, k: int) -> None:
     path.write_text(source, encoding="utf-8")
 
 
-def _copy_kernel(kernel_src: Path, dst: Path) -> None:
+def _copy_kernel(kernel_src: Path, dst: Path, core_type: str) -> None:
     source = kernel_src.read_text(encoding="utf-8")
     if "TL_ASCEND_310P" not in source:
         source = "#define TL_ASCEND_310P 1\n" + source
+    source = _normalize_external_kernel_source(source, core_type)
     dst.write_text(source, encoding="utf-8")
+
+
+def _normalize_external_kernel_source(source: str, core_type: str) -> str:
+    """Keep generated TileLang source focused on one CAModel core type."""
+    source = source.replace('#include "acl/acl.h"\n', "")
+    source = source.replace("#include <runtime/rt_ffts.h>\n", "")
+    source = source.replace(", uint64_t fftsAddr) {", ") {")
+    source = source.replace("  pipe.Destroy();\n", "")
+    if core_type == "VectorCore":
+        source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);",
+                                "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);")
+        source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_1);",
+                                "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);")
+        source = re.sub(r"(\n\s*)if ASCEND_IS_AIV \{\n(.*?)\n\s*\}", r"\1{\n\2\n\1}", source, flags=re.DOTALL)
+        source = re.sub(r"\n\s*if ASCEND_IS_AIC \{\n\s*[^{}]*?\n\s*\}\n", "\n", source)
+    else:
+        source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);",
+                                "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);")
+        source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_1);",
+                                "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);")
+        source = re.sub(r"\n\s*if ASCEND_IS_AIV \{\n\s*[^{}]*?\n\s*\}\n", "\n", source)
+        source = re.sub(r"(\n\s*)if ASCEND_IS_AIC \{\n(.*?)\n\s*\}", r"\1{\n\2\n\1}", source, flags=re.DOTALL)
+    source = re.sub(r"\nvoid\s+\w+_tiling\([^{}]*\)\s*\{\s*\}\n", "\n", source)
+    source = re.sub(
+        r'\nextern\s+"C"\s+void\s+call\([^{}]*\)\s*\{.*?\n\}\s*$',
+        "\n",
+        source,
+        flags=re.DOTALL,
+    )
+    return source
 
 
 def _write_data(work_dir: Path, m: int, n: int, k: int) -> tuple[Path, Path, Path]:
@@ -164,7 +196,13 @@ def _write_data(work_dir: Path, m: int, n: int, k: int) -> tuple[Path, Path, Pat
     return a_path, b_path, c_path
 
 
-def _compile_kernel(env: dict[str, str], ascend_home: Path, work_dir: Path, kernel_cpp: Path) -> Path:
+def _compile_kernel(
+    env: dict[str, str],
+    ascend_home: Path,
+    work_dir: Path,
+    kernel_cpp: Path,
+    opt_level: str,
+) -> Path:
     kernel_o = work_dir / "main_kernel.o"
     logs_dir = work_dir / "logs"
     includes = [
@@ -201,7 +239,7 @@ def _compile_kernel(env: dict[str, str], ascend_home: Path, work_dir: Path, kern
         "--cce-aicore-arch=dav-m200",
         "-Dmain_kernel=main_kernel_1",
         "-D__NPU_TILING__",
-        "-O3",
+        opt_level,
         "--cce-aicore-only",
         "-std=c++17",
         "-mllvm",
@@ -229,14 +267,23 @@ def _compile_kernel(env: dict[str, str], ascend_home: Path, work_dir: Path, kern
     return kernel_o
 
 
-def _run_camodel_api(env: dict[str, str], work_dir: Path, kernel_o: Path, m: int, n: int, k: int) -> None:
+def _run_camodel_api(
+    env: dict[str, str],
+    work_dir: Path,
+    kernel_o: Path,
+    core_type: str,
+    timeout: int,
+    m: int,
+    n: int,
+    k: int,
+) -> None:
     script = work_dir / "run_camodel_api.py"
     script.write_text(
         f"""
 from ascendebug import DebugOp, OpExecutor, RunSimuOptions, TilingInfo, NpuCompileInfo
 
 def main():
-    debug_op = DebugOp("Tilelang310PGemm", core_type="AiCore", chip_version="Ascend310P1")
+    debug_op = DebugOp("Tilelang310PGemm", core_type="{core_type}", chip_version="Ascend310P1")
     debug_op.custom_input("A", "float16", [{m}, {k}], r"{work_dir / 'A.bin'}")
     debug_op.custom_input("B", "float16", [{k}, {n}], r"{work_dir / 'B.bin'}")
     debug_op.custom_output("C", "float16", [{m}, {n}], r"{work_dir / 'C_out.bin'}")
@@ -244,7 +291,7 @@ def main():
     executor = OpExecutor(debug_op, r"{work_dir / 'ascendebug_workspace'}", r"{str(_find_ascend_home().parent)}")
     executor.run_camodel(
         r"{kernel_o}",
-        RunSimuOptions(block_num=1, timeout=600),
+        RunSimuOptions(block_num=1, timeout={timeout}),
         NpuCompileInfo(syncall=False),
         TilingInfo("", 0, 1, 1),
     )
@@ -286,10 +333,15 @@ def main() -> None:
     parser.add_argument("--kernel-cpp", type=Path, default=None,
                         help="Compile and run this generated kernel source instead of the built-in smoke kernel.")
     parser.add_argument("--skip-run", action="store_true", help="Only generate data/source and compile the .o file.")
+    parser.add_argument("--compile-opt-level", default=None, choices=["-O0", "-O1", "-O2", "-O3"],
+                        help="Override the ccec optimization level. External generated kernels default to -O0.")
+    parser.add_argument("--core-type", choices=["AiCore", "VectorCore"], default="AiCore",
+                        help="CAModel core type for external generated kernels.")
+    parser.add_argument("--timeout", type=int, default=600, help="CAModel launch timeout in seconds.")
     args = parser.parse_args()
 
-    if args.m % 16 or args.n % 16 or args.k % 16:
-        raise ValueError("M, N, and K must be multiples of 16 for this smoke kernel.")
+    if args.kernel_cpp is None and (args.m % 16 or args.n % 16 or args.k % 16):
+        raise ValueError("M, N, and K must be multiples of 16 for the built-in smoke kernel.")
 
     ascend_home = _find_ascend_home()
     env = _prepare_env(ascend_home)
@@ -305,13 +357,14 @@ def main() -> None:
     if kernel_src is None:
         _write_kernel(kernel_cpp, args.m, args.n, args.k)
     else:
-        _copy_kernel(kernel_src, kernel_cpp)
+        _copy_kernel(kernel_src, kernel_cpp, args.core_type)
     _, _, golden_path = _write_data(work_dir, args.m, args.n, args.k)
-    kernel_o = _compile_kernel(env, ascend_home, work_dir, kernel_cpp)
+    opt_level = args.compile_opt_level or ("-O3" if kernel_src is None else "-O0")
+    kernel_o = _compile_kernel(env, ascend_home, work_dir, kernel_cpp, opt_level)
     print(f"310P kernel object: {kernel_o}")
 
     if not args.skip_run:
-        _run_camodel_api(env, work_dir, kernel_o, args.m, args.n, args.k)
+        _run_camodel_api(env, work_dir, kernel_o, args.core_type, args.timeout, args.m, args.n, args.k)
         _compare_outputs(work_dir, golden_path, args.m, args.n)
 
 
