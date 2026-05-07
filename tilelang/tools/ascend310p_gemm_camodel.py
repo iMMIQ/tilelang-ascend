@@ -161,15 +161,13 @@ def _normalize_external_kernel_source(source: str, core_type: str) -> str:
                                 "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);")
         source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_1);",
                                 "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);")
-        source = re.sub(r"(\n\s*)if ASCEND_IS_AIV \{\n(.*?)\n\s*\}", r"\1{\n\2\n\1}", source, flags=re.DOTALL)
-        source = re.sub(r"\n\s*if ASCEND_IS_AIC \{\n\s*[^{}]*?\n\s*\}\n", "\n", source)
+        source = _select_core_branch(source, "ASCEND_IS_AIV")
     else:
         source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);",
                                 "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);")
         source = source.replace("KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_1);",
                                 "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);")
-        source = re.sub(r"\n\s*if ASCEND_IS_AIV \{\n\s*[^{}]*?\n\s*\}\n", "\n", source)
-        source = re.sub(r"(\n\s*)if ASCEND_IS_AIC \{\n(.*?)\n\s*\}", r"\1{\n\2\n\1}", source, flags=re.DOTALL)
+        source = _select_core_branch(source, "ASCEND_IS_AIC")
     source = re.sub(r"\nvoid\s+\w+_tiling\([^{}]*\)\s*\{\s*\}\n", "\n", source)
     source = re.sub(
         r'\nextern\s+"C"\s+void\s+call\([^{}]*\)\s*\{.*?\n\}\s*$',
@@ -178,6 +176,49 @@ def _normalize_external_kernel_source(source: str, core_type: str) -> str:
         flags=re.DOTALL,
     )
     return source
+
+
+def _select_core_branch(source: str, keep_condition: str) -> str:
+    for condition in ("ASCEND_IS_AIV", "ASCEND_IS_AIC"):
+        source = _rewrite_condition_blocks(
+            source, condition, keep=(condition == keep_condition)
+        )
+    return source
+
+
+def _rewrite_condition_blocks(source: str, condition: str, keep: bool) -> str:
+    pattern = f"if {condition} {{"
+    cursor = 0
+    result: list[str] = []
+    while True:
+        start = source.find(pattern, cursor)
+        if start < 0:
+            result.append(source[cursor:])
+            break
+        line_start = source.rfind("\n", cursor, start) + 1
+        indent = source[line_start:start]
+        result.append(source[cursor:line_start])
+        body_start = start + len(pattern)
+        depth = 1
+        pos = body_start
+        while pos < len(source) and depth:
+            if source[pos] == "{":
+                depth += 1
+            elif source[pos] == "}":
+                depth -= 1
+            pos += 1
+        if depth:
+            result.append(source[line_start:])
+            return "".join(result)
+        body = source[body_start:pos - 1]
+        if keep:
+            result.append(indent + "{")
+            result.append(body)
+            result.append("\n" + indent + "}")
+        cursor = pos
+        if cursor < len(source) and source[cursor] == "\n":
+            cursor += 1
+    return "".join(result)
 
 
 def _write_data(work_dir: Path, m: int, n: int, k: int) -> tuple[Path, Path, Path]:
@@ -202,6 +243,7 @@ def _compile_kernel(
     work_dir: Path,
     kernel_cpp: Path,
     opt_level: str,
+    core_type: str = "AiCore",
 ) -> Path:
     kernel_o = work_dir / "main_kernel.o"
     logs_dir = work_dir / "logs"
@@ -240,7 +282,6 @@ def _compile_kernel(
         "-Dmain_kernel=main_kernel_1",
         "-D__NPU_TILING__",
         opt_level,
-        "--cce-aicore-only",
         "-std=c++17",
         "-mllvm",
         "-cce-aicore-function-stack-size=16000",
@@ -255,9 +296,16 @@ def _compile_kernel(
         "-o",
         str(tmp_o),
     ]
+    if core_type == "VectorCore":
+        compile_cmd.insert(compile_cmd.index("-std=c++17"), "--cce-aiv")
+    else:
+        compile_cmd.insert(compile_cmd.index("-std=c++17"), "--cce-aicore-only")
     for include in includes:
         compile_cmd.insert(-2, f"-I{include}")
     _run(compile_cmd, env=env, cwd=work_dir, log_path=logs_dir / "compile.log")
+    if core_type == "VectorCore":
+        shutil.copy2(tmp_o, kernel_o)
+        return kernel_o
     _run(
         ["ld.lld", "-m", "aicorelinux", "-Ttext=0", str(tmp_o), "-static", "-n", "-o", str(kernel_o)],
         env=env,
@@ -360,7 +408,7 @@ def main() -> None:
         _copy_kernel(kernel_src, kernel_cpp, args.core_type)
     _, _, golden_path = _write_data(work_dir, args.m, args.n, args.k)
     opt_level = args.compile_opt_level or ("-O3" if kernel_src is None else "-O0")
-    kernel_o = _compile_kernel(env, ascend_home, work_dir, kernel_cpp, opt_level)
+    kernel_o = _compile_kernel(env, ascend_home, work_dir, kernel_cpp, opt_level, args.core_type)
     print(f"310P kernel object: {kernel_o}")
 
     if not args.skip_run:

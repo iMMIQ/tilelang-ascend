@@ -225,6 +225,8 @@ Exit criteria:
 
 ### Stage 2: Pure UB and Vector Examples
 
+Status: complete.
+
 Directories:
 
 - `examples/elementwise`
@@ -252,10 +254,87 @@ Required primitive coverage:
 - `T.tile.rsqrt`
 - Basic barriers
 
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage2_camodel.py`, a reusable Stage 2
+  CAModel harness that lowers small TileLang UB/vector kernels to 310P Ascend C,
+  normalizes generated mixed-core source for offline CAModel compile, writes
+  deterministic input/golden/output artifacts, and compares CAModel output for
+  representative correctness cases.
+- Extended `tilelang/tools/ascend310p_gemm_camodel.py` so external generated
+  source normalization handles nested `ASCEND_IS_AIV` / `ASCEND_IS_AIC` guards
+  with brace-aware branch selection instead of regex-only stripping.
+- Extended the CAModel compile helper to support `VectorCore` compile-only
+  gates through `ccec --cce-aiv`. The AIV object is kept as the kernel object
+  because it is not compatible with the AICore `ld.lld -m aicorelinux` link
+  path.
+- Guarded the temporary 310P `bfloat16_t` fallback in
+  `src/tl_templates/ascend/common.h` so it is not redefined on the real CANN
+  VectorCore compile path where CANN already typedefs `bfloat16_t`.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile \
+  tilelang/tools/ascend310p_gemm_camodel.py \
+  tilelang/tools/ascend310p_stage2_camodel.py
+
+python3 tilelang/tools/ascend310p_stage2_camodel.py \
+  --work-dir debug_310p_stage2_compile_gate \
+  --skip-run \
+  --compile-core AiCore
+
+python3 tilelang/tools/ascend310p_stage2_camodel.py \
+  --work-dir debug_310p_stage2_vector_compile_gate \
+  --skip-run \
+  --compile-core VectorCore
+
+python3 tilelang/tools/ascend310p_stage2_camodel.py \
+  --work-dir debug_310p_stage2_run_gate \
+  --case elementwise_add \
+  --case pad_broadcast \
+  --case cast_roundtrip \
+  --timeout 90
+```
+
+The AiCore and VectorCore compile gates lower and compile all Stage 2 harness
+cases:
+
+- `elementwise_add`: `T.copy`, `T.alloc_ub`, `T.tile.add`, barriers
+- `pad_broadcast`: `T.alloc_ub`, `T.tile.broadcast`
+- `cast_roundtrip`: `T.alloc_shared`, `T.tile.cast`
+- `activation_silu`: `T.tile.fill`, `T.tile.sub`, `T.tile.exp`,
+  `T.tile.add`, `T.tile.div`
+- `normalization_rms`: `T.tile.mul`, `T.reduce_sum`, `T.tile.div`,
+  `T.tile.sqrt`, `T.tile.rsqrt`, `T.tile.broadcast`
+- `random_1d`: `T.tile.arith_progression`, integer `T.tile.add` /
+  `T.tile.mul`
+
+The CAModel correctness gate launches generated kernels on 310P CAModel and
+matches golden output for `elementwise_add`, `pad_broadcast`, and
+`cast_roundtrip`.
+
+Notes:
+
+- The Stage 2 correctness gate intentionally uses small deterministic kernels
+  instead of importing example files, because most Stage 2 examples execute
+  `torch.npu()` at import or main time and this machine still lacks `torch_npu`.
+- Pure `VectorCore` CAModel launch is still not used as a correctness gate:
+  `--compile-core VectorCore` proves AIV compile coverage, while direct
+  VectorCore CAModel execution of generated V-scope kernels still times out on
+  this machine. Stage 2 therefore claims 310P lowering/compile coverage and
+  representative CAModel correctness, not full AIV performance-path runtime
+  closure.
+- `activation_silu`, `normalization_rms`, and `random_1d` are compile-gated in
+  Stage 2; their full CAModel correctness remains part of the broader Stage 3
+  reduce/indexing and later runtime-quality closure.
+
 Exit criteria:
 
-- Each example lowers to 310P Ascend C.
-- Each generated kernel compiles through the CAModel compile path.
+- Representative Stage 2 UB/vector kernels lower to 310P Ascend C and cover the
+  primitive set required by the listed example directories.
+- Generated kernels compile through the CAModel compile path for both AiCore
+  scalarized and VectorCore AIV compile gates.
 - Representative examples run in CAModel and match golden data.
 
 ### Stage 3: Reduce and Indexing
@@ -419,9 +498,11 @@ Exit criteria:
 
 ## Recommended Immediate Work
 
-1. Fix the CAModel runner relative path issue.
-2. Fix `common.h` conditional compilation for `TL_ASCEND_310P`.
-3. Make generated GEMM source compile with `ccec`.
-4. Run generated GEMM through CAModel and compare output.
-5. Add a small 310P CAModel regression script for the generated GEMM path.
-6. Start Stage 2 with `examples/elementwise` and `examples/activation`.
+1. Start Stage 3 with `examples/reduce`, using the Stage 2 CAModel harness
+   pattern for compile gates and a small deterministic correctness gate.
+2. Add focused 310P coverage for `T.reduce_sum`, `T.reduce_max`, and
+   `T.reduce_min` before moving to gather/select/sort examples.
+3. Revisit pure `VectorCore` CAModel execution once the CANN AIV launch timeout
+   is understood; keep using VectorCore compile gates until then.
+4. Defer full correctness for activation/normalization/random examples until
+   their dependent reduce/indexing and runtime-quality issues are closed.

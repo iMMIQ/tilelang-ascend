@@ -1,4 +1,5 @@
-#if defined(TL_ASCEND_310P) && !defined(TL_ASCEND_BFLOAT16_T_DEFINED)
+#if defined(TL_ASCEND_310P) && defined(__CCE_AICORE__) && \
+    !defined(TL_ASCEND_BFLOAT16_T_DEFINED)
 #define TL_ASCEND_BFLOAT16_T_DEFINED
 struct alignas(2) bfloat16_t {
   uint16_t raw;
