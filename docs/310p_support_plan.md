@@ -561,6 +561,9 @@ Notes:
 
 ### Stage 6: Fusion, Pipeline, and Cross-Scope Sync
 
+Status: complete for 310P cross-scope and pipeline lower/compile coverage;
+mixed-core CAModel runtime correctness remains follow-up work.
+
 Directories:
 
 - `examples/pipeline`
@@ -585,6 +588,38 @@ Exit criteria:
 
 - Cross-scope synchronization is correct on 310P.
 - Pipeline examples compile and pass representative CAModel correctness tests.
+
+Completed changes:
+
+- Added a 310P-specific codegen normalization for cross-core set flags:
+  generated `PIPE_FIX` cross-core set flags now emit `PIPE_MTE3` for platform
+  `310P`, matching the dav-m200 CANN compile path.
+- Added `tilelang/tools/ascend310p_stage6_camodel.py`, a reusable Stage 6
+  compile harness.
+- Added compile coverage for representative Stage 6 patterns:
+  - `cross_scope_fusion`: explicit `T.Scope("C")`, `T.Scope("V")`,
+    `T.set_cross_flag`, `T.wait_cross_flag`, and C/V handoff.
+  - `pipelined_vector`: `T.Pipelined` plus `T.pipe_barrier` in a vector-style
+    loop.
+
+Verification commands run:
+
+```bash
+make -j$(nproc)  # from build/
+
+python3 -m py_compile tilelang/tools/ascend310p_stage6_camodel.py
+
+python3 tilelang/tools/ascend310p_stage6_camodel.py \
+  --work-dir debug_310p_stage6_compile_gate
+```
+
+Notes:
+
+- The Stage 6 gate is currently a lower/compile gate. The local CAModel helper
+  still selects one core branch for offline AiCore/VectorCore execution, so it
+  cannot yet prove real mixed-core C/V runtime synchronization.
+- Pipeline examples that also depend on optimized cube GEMM inherit the Stage 4
+  optimized cube runtime blocker.
 
 ### Stage 7: FlashAttention and Sparse Attention
 

@@ -44,6 +44,14 @@ namespace codegen {
 #define ASCEND_310P_L0C_SIZE (262144)
 #define ASCEND_310P_UB_SIZE (262144)
 
+std::string NormalizeAscendCrossCorePipe(std::string pipe,
+                                         const std::string &platform) {
+  if (platform == "310P" && pipe == "FIX") {
+    return "MTE3";
+  }
+  return pipe;
+}
+
 std::string getType(const DataType &dtype) {
   if (dtype.is_float16()) {
     return "half";
@@ -2039,7 +2047,8 @@ void CodeGenTileLangAscend::BroadcastOpCodegen(const CallNode *op) {
 }
 
 void CodeGenTileLangAscend::SetCrossFlagCodegen(const CallNode *op) {
-  std::string pipe = Downcast<StringImm>(op->args[0])->value;
+  std::string pipe = NormalizeAscendCrossCorePipe(
+      Downcast<StringImm>(op->args[0])->value, platform_);
   int mode = op->args[2].as<IntImmNode>()->value;
   std::string op_name = "AscendC::CrossCoreSetFlag<0x";
   op_name.append(std::to_string(mode));
@@ -2210,7 +2219,9 @@ void CodeGenTileLangAscend::AutoFlagOpCodegen(const CallNode *op,
 void CodeGenTileLangAscend::AutoSetCrossFlagCodegen(const CallNode *op) {
   this->PrintIndent();
   auto model_id = op->args[0].as<IntImmNode>()->value;
-  auto pipe = op->args[1].as<StringImmNode>()->value;
+  auto pipe =
+      NormalizeAscendCrossCorePipe(op->args[1].as<StringImmNode>()->value,
+                                   platform_);
   auto flag_id = op->args[2].as<IntImmNode>()->value;
   this->stream << "AscendC::CrossCoreSetFlag<" << model_id << ", PIPE_" << pipe
                << ">(" << flag_id << ");\n";
