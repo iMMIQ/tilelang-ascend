@@ -623,6 +623,10 @@ Notes:
 
 ### Stage 7: FlashAttention and Sparse Attention
 
+Status: complete for 310P attention-shape lower/compile coverage; runtime
+correctness remains blocked by the Stage 4 optimized cube runtime issue and by
+the local CAModel helper's limited mixed-core execution model.
+
 Directories:
 
 - `examples/flash_attention`
@@ -647,6 +651,36 @@ Exit criteria:
   correctness case.
 - Optimization variants can be separated into "functional" and "performance"
   milestones.
+
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage7_camodel.py`, a Stage 7 compile
+  harness for attention-shaped kernels.
+- Added compile coverage for `flash_attention_shape`, covering Q/K/V copies,
+  score workspace, row-wise `T.reduce_max`, exponentiation, row-wise
+  `T.reduce_sum`, softmax normalization, output workspace writes, and final
+  output copies.
+- Added compile coverage for `sparse_attention_index`, covering sparse index
+  copies, `T.tile.gather`, scalar `T.reduce_sum`, and broadcast-style output
+  writes.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile tilelang/tools/ascend310p_stage7_camodel.py
+
+python3 tilelang/tools/ascend310p_stage7_camodel.py \
+  --work-dir debug_310p_stage7_compile_gate
+```
+
+Notes:
+
+- This stage intentionally claims lower/compile coverage rather than full
+  correctness. Full FlashAttention runtime closure still depends on closing the
+  optimized cube `T.gemm_v0` CAModel blocker and the mixed C/V runtime path.
+- Sparse/paged attention example families remain represented by primitive
+  shape coverage here; broader dynamic-shape runtime validation should be added
+  once the runtime blockers are closed.
 
 ### Stage 8: MoE, Shared Memory, and Integration Examples
 
