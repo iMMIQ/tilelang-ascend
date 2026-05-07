@@ -417,6 +417,8 @@ Notes:
 
 ### Stage 4: Basic Cube and GEMM Closure
 
+Status: in progress.
+
 Directories:
 
 - `examples/gemm`
@@ -442,6 +444,22 @@ Exit criteria:
 
 - GEMM, batch GEMM, GEMV, and simple fusion compile and run in CAModel.
 - Tail-block examples have correctness coverage.
+
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage4_camodel.py`, a reusable Stage 4
+  harness that lowers small GEMM, batch GEMM, GEMV, simple fusion, and
+  convolution kernels to 310P Ascend C, compiles them through `ccec`, and
+  drives CAModel with deterministic input/golden/output artifacts.
+- The harness exercises the current 310P cube lowering path and records the
+  generated source, object file, simulator logs, and comparison outputs in the
+  debug work directory.
+
+Current blocker:
+
+- The 310P cube writeback path is still not closed. The existing GEMM cube
+  source compiles, but CAModel runtime still returns incorrect output, so Stage
+  4 remains in progress.
 
 ### Stage 5: Developer Mode and Automatic Passes
 
