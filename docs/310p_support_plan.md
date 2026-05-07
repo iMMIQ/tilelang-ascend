@@ -53,22 +53,25 @@ python3 examples/gemm/example_gemm_310p.py \
   --m 128 --n 128 --k 64
 ```
 
-However, the generated TileLang 310P GEMM source does not yet compile through
-the current CAModel compile path.
+The generated TileLang 310P GEMM source now compiles through the current
+CAModel compile path after source normalization in
+`tilelang/tools/ascend310p_gemm_camodel.py`.
 
 ## Known Blockers
 
-1. `src/tl_templates/ascend/common.h` has incomplete conditional compilation
-   under `TL_ASCEND_310P`; it currently exposes an unmatched `#endif`.
-2. Some helper implementations use Ascend C APIs that are not available in the
-   current 310P CANN headers, including `AscendC::Pattern::Reduce`.
-3. Some helper implementations use APIs whose namespace or signature differs on
-   this toolchain, such as `AscendC::Broadcast`.
-4. Generated source includes `<runtime/rt_ffts.h>`, which is not found by the
-   current CAModel compile include path.
-5. Resolved in Stage 0: `tilelang/tools/ascend310p_gemm_camodel.py` now works
+1. Generated cube GEMM now compiles for 310P, but optimized cube CAModel
+   correctness is not closed. The dav-m200 CANN headers mark the normal
+   CATLASS L0C-to-GM `Fixpipe` path as unsupported, so Stage 4 must replace
+   that path with a real 310P cube writeback strategy instead of the temporary
+   scalar compile fallback.
+2. Generated scalar GEMM can lower and compile, but running the generated
+   VectorCore body in CAModel currently times out and leaves the output at a
+   constant `85.3125` instead of the golden value. The logs report
+   `never-ending instructions`, so this remains the first Stage 2 blocker for
+   pure UB/vector examples.
+3. Resolved in Stage 0: `tilelang/tools/ascend310p_gemm_camodel.py` now works
    with both relative and absolute `--work-dir` values.
-6. `torch_npu` is not installed, so runtime JIT paths that require real NPU
+4. `torch_npu` is not installed, so runtime JIT paths that require real NPU
    integration cannot be validated on this machine yet. CAModel-only validation
    is still usable.
 
@@ -139,6 +142,8 @@ Exit criteria:
 
 ### Stage 1: 310P Template and GEMM Compile
 
+Status: compile gate complete; generated CAModel correctness blocked.
+
 Objectives:
 
 - Fix `src/tl_templates/ascend/common.h` under `TL_ASCEND_310P`.
@@ -147,10 +152,80 @@ Objectives:
 - Compile `examples/gemm/example_gemm_310p.py` generated source with `ccec`.
 - Run that generated GEMM through CAModel and compare against golden output.
 
+Completed changes:
+
+- Added 310P conditional guards and fallbacks in
+  `src/tl_templates/ascend/common.h` for:
+  - GM-to-L1 copy
+  - UB GM/UB copy helpers that avoid unsupported `DataCopyPad`
+  - L0C-to-GM writeback compile fallback
+  - `reduce_sum`, `reduce_max`, and `reduce_min`
+  - `gemm_v0` scalar compile fallback
+  - `Broadcast`
+  - shmem helpers that should not be exposed under `TL_ASCEND_310P`
+- Extended `tilelang/tools/ascend310p_gemm_camodel.py` so external generated
+  source can be normalized for CAModel compile:
+  - strips host-only ACL/FFTS includes and the generated host `call` wrapper
+  - removes the FFTS kernel argument from the kernel signature
+  - selects one mixed-core source branch for `AiCore` or `VectorCore`
+  - supports `--compile-opt-level`, `--core-type`, and `--timeout`
+- Extended `examples/gemm/example_gemm_310p.py` with configurable block sizes
+  and a scalar backend used for small generated-source experiments.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile \
+  tilelang/tools/ascend310p_gemm_camodel.py \
+  examples/gemm/example_gemm_310p.py
+
+python3 examples/gemm/example_gemm_310p.py \
+  --mode lower \
+  --debug-root debug_310p_gemm_lower \
+  --m 128 --n 128 --k 64 \
+  --block-m 128 --block-n 128 --block-k 64
+
+python3 tilelang/tools/ascend310p_gemm_camodel.py \
+  --work-dir debug_310p_stage1_tl_generated_compile128 \
+  --kernel-cpp debug_310p_gemm_lower/tilelang_gemm_310p.cpp \
+  --m 128 --n 128 --k 64 \
+  --skip-run
+```
+
+The 128x128x64 generated cube GEMM lowers and compiles/links with `ccec` for
+`dav-m200`.
+
+Negative CAModel result:
+
+```bash
+python3 examples/gemm/example_gemm_310p.py \
+  --mode lower \
+  --backend scalar \
+  --debug-root debug_310p_gemm_lower_scalar_1x1 \
+  --m 1 --n 1 --k 16 \
+  --block-m 1 --block-n 1 --block-k 16
+
+python3 tilelang/tools/ascend310p_gemm_camodel.py \
+  --work-dir debug_310p_stage1_tl_generated_scalar_1x1 \
+  --kernel-cpp debug_310p_gemm_lower_scalar_1x1/tilelang_gemm_310p.cpp \
+  --m 1 --n 1 --k 16 \
+  --compile-opt-level=-O3 \
+  --core-type VectorCore \
+  --timeout 60
+```
+
+The generated scalar kernel compiles and launches, but CAModel times out with
+`never-ending instructions`; output remains `85.3125` while golden is
+`2.47265625`. Generated-source CAModel correctness is therefore not claimed
+complete in this stage.
+
 Exit criteria:
 
-- `example_gemm_310p.py --mode lower` output compiles with `ccec`.
-- Generated GEMM runs in CAModel and matches golden data.
+- Complete: `example_gemm_310p.py --mode lower` cube output compiles with
+  `ccec`.
+- Blocked: generated GEMM does not yet run in CAModel and match golden data.
+  This moves to Stage 2 for UB/vector execution and Stage 4 for optimized cube
+  execution.
 
 ### Stage 2: Pure UB and Vector Examples
 
