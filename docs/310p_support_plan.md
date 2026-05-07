@@ -366,6 +366,55 @@ Exit criteria:
 - Indexing examples compile; dynamic or workspace-heavy examples can initially
   be marked as partial if the static path is validated.
 
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage3_camodel.py`, a reusable Stage 3
+  harness that lowers small reduce and indexing kernels to 310P Ascend C,
+  compiles them through `ccec`, and runs selected CAModel cases.
+- Added 310P 310P-stage coverage for the following primitives in the harness:
+  - `T.reduce_sum`
+  - `T.reduce_max`
+  - `T.reduce_min`
+  - `T.tile.compare`
+  - `T.tile.select`
+  - `T.tile.gather`
+  - `T.tile.gather_mask`
+  - `T.tile.topk`
+  - `T.tile.merge_sort`
+- Verified compile gates on both `AiCore` and `VectorCore` for the Stage 3
+  kernel set.
+- Verified CAModel runtime output for `compare_select` and `gather`.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile tilelang/tools/ascend310p_stage3_camodel.py
+
+python3 tilelang/tools/ascend310p_stage3_camodel.py \
+  --work-dir debug_310p_stage3_default \
+  --skip-run \
+  --compile-core AiCore
+
+python3 tilelang/tools/ascend310p_stage3_camodel.py \
+  --work-dir debug_310p_stage3_vector_compile_gate \
+  --skip-run \
+  --compile-core VectorCore
+
+python3 tilelang/tools/ascend310p_stage3_camodel.py \
+  --work-dir debug_310p_stage3_index_run \
+  --case compare_select \
+  --case gather \
+  --timeout 90
+```
+
+Notes:
+
+- `compare_select` and `gather` are the current Stage 3 runtime gates.
+- `reduce_sum`, `reduce_max`, `reduce_min`, `gather_mask`, `topk`, and
+  `merge_sort` are compile-gated at Stage 3 for now.
+- Reduce runtime closure still needs follow-up work in the generated 310P
+  writeback path; keep it out of the default runtime gate until that is closed.
+
 ### Stage 4: Basic Cube and GEMM Closure
 
 Directories:
