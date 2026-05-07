@@ -90,7 +90,7 @@ def matmul_scalar(M, N, K, block_M, block_N, dtype="float16", accum_dtype="float
             B_UB = T.alloc_ub((K, block_N), dtype)
             C_UB = T.alloc_ub((block_M, block_N), dtype)
 
-            with T.Scope("V"):
+            with T.Scope("C"):
                 T.copy(A[bx * block_M, 0], A_UB)
                 T.copy(B[0, by * block_N], B_UB)
 
