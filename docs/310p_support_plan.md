@@ -684,6 +684,11 @@ Notes:
 
 ### Stage 8: MoE, Shared Memory, and Integration Examples
 
+Status: complete for 310P MoE and aclgraph integration-shape lower/compile
+coverage; shmem, dispatch-combine, and torch integration examples are
+explicitly documented as unavailable on this CAModel machine unless their
+external runtime dependencies are installed and a 310P shmem path is added.
+
 Directories:
 
 - `examples/moe_token_permute`
@@ -706,6 +711,44 @@ Exit criteria:
   explicitly documented as unsupported on 310P.
 - Integration examples have a clear CAModel-only path or are marked as requiring
   runtime NPU dependencies.
+
+Completed changes:
+
+- Added `tilelang/tools/ascend310p_stage8_camodel.py`, a Stage 8 compile and
+  dependency-report harness.
+- Added 310P compile coverage for `moe_token_unpermute_shape`, covering token
+  index copies, probability casts, dynamic GM row copies, `T.tile.axpy`,
+  explicit `T.set_flag`/`T.wait_flag`, and `T.pipe_barrier`.
+- Added 310P compile coverage for `moe_token_permute_grad_shape`, covering
+  token-gradient gather/scatter-style dynamic indexing, explicit V/MTE
+  synchronization, accumulation, and output casts.
+- Added 310P compile coverage for `aclgraph_rms_rope_shape`, covering RMS
+  reduction, vector arithmetic, RoPE mask construction, reinterpret cast,
+  broadcast, `T.tile.gather`, and final GM output copy.
+- Added an explicit local dependency report for integration-only examples:
+  `torch_npu` is missing on this machine, `shmem` is missing, and
+  `TL_ASCEND_310P` currently excludes shmem helper definitions in
+  `src/tl_templates/ascend/common.h`.
+
+Verification commands run:
+
+```bash
+python3 -m py_compile tilelang/tools/ascend310p_stage8_camodel.py
+
+python3 tilelang/tools/ascend310p_stage8_camodel.py \
+  --work-dir debug_310p_stage8_compile_gate \
+  --dependency-report
+```
+
+Notes:
+
+- Stage 8 is deliberately split between supported compile coverage and
+  documented dependency gaps. The local machine cannot validate
+  `examples/torch_tl_ascend` because `torch_npu` is unavailable.
+- `examples/shmem` and `examples/dispatch_combine` remain unsupported for 310P
+  in this tree because the common template excludes shmem helpers under
+  `TL_ASCEND_310P`; adding a real 310P shmem implementation should be tracked as
+  a separate runtime integration milestone.
 
 ## Recommended Immediate Work
 
