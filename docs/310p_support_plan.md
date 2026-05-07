@@ -339,6 +339,9 @@ Exit criteria:
 
 ### Stage 3: Reduce and Indexing
 
+Status: complete for 310P reduce/index lower and compile coverage, with
+runtime correctness covered for the current compare/select and gather gates.
+
 Directories:
 
 - `examples/reduce`
@@ -750,13 +753,21 @@ Notes:
   `TL_ASCEND_310P`; adding a real 310P shmem implementation should be tracked as
   a separate runtime integration milestone.
 
-## Recommended Immediate Work
+## Remaining Follow-Up
 
-1. Start Stage 3 with `examples/reduce`, using the Stage 2 CAModel harness
-   pattern for compile gates and a small deterministic correctness gate.
-2. Add focused 310P coverage for `T.reduce_sum`, `T.reduce_max`, and
-   `T.reduce_min` before moving to gather/select/sort examples.
-3. Revisit pure `VectorCore` CAModel execution once the CANN AIV launch timeout
-   is understood; keep using VectorCore compile gates until then.
-4. Defer full correctness for activation/normalization/random examples until
-   their dependent reduce/indexing and runtime-quality issues are closed.
+All planned stages now have a 310P CAModel harness, compile gate, runtime gate,
+dependency report, or explicit unsupported-path note. The remaining work is not
+a new stage in this plan; it is runtime closure for the known blockers:
+
+1. Close the optimized cube `T.gemm_v0` CAModel runtime issue. The generated
+   128x128x64 cube source compiles for 310P, but CAModel execution still returns
+   incorrect fixed output and reports never-ending instructions.
+2. Add a real mixed-core C/V CAModel runtime path. Stages 6 and 7 currently
+   prove lower/compile legality for cross-scope and attention-shaped kernels,
+   but the local helper executes one selected core branch offline.
+3. Add or enable 310P shmem support before claiming `examples/shmem` and
+   `examples/dispatch_combine` runtime support. The current template excludes
+   shmem helpers under `TL_ASCEND_310P`.
+4. Install `torch_npu`/NPU runtime dependencies before validating
+   `examples/torch_tl_ascend` and original runtime JIT example scripts on this
+   machine.
