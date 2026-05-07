@@ -58,9 +58,30 @@ extern "C" __global__ __aicore__ void main_kernel(GM_ADDR A_handle, GM_ADDR B_ha
 ''')
 
 
-def _run(cmd: list[str], *, env: dict[str, str], cwd: Path) -> None:
+def _run(cmd: list[str], *, env: dict[str, str], cwd: Path, log_path: Path | None = None) -> None:
     print("+ " + " ".join(cmd))
-    subprocess.run(cmd, cwd=cwd, env=env, check=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if proc.stdout:
+        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write("+ " + " ".join(cmd) + "\n")
+            log_file.write(f"# cwd: {cwd}\n")
+            log_file.write(proc.stdout or "")
+            if proc.stdout and not proc.stdout.endswith("\n"):
+                log_file.write("\n")
+            log_file.write(f"# exit_code: {proc.returncode}\n\n")
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout)
 
 
 def _find_ascend_home() -> Path:
@@ -145,6 +166,7 @@ def _write_data(work_dir: Path, m: int, n: int, k: int) -> tuple[Path, Path, Pat
 
 def _compile_kernel(env: dict[str, str], ascend_home: Path, work_dir: Path, kernel_cpp: Path) -> Path:
     kernel_o = work_dir / "main_kernel.o"
+    logs_dir = work_dir / "logs"
     includes = [
         ascend_home / "x86_64-linux" / "include",
         ascend_home / "x86_64-linux" / "include" / "ascendc",
@@ -197,8 +219,13 @@ def _compile_kernel(env: dict[str, str], ascend_home: Path, work_dir: Path, kern
     ]
     for include in includes:
         compile_cmd.insert(-2, f"-I{include}")
-    _run(compile_cmd, env=env, cwd=work_dir)
-    _run(["ld.lld", "-m", "aicorelinux", "-Ttext=0", str(tmp_o), "-static", "-n", "-o", str(kernel_o)], env=env, cwd=work_dir)
+    _run(compile_cmd, env=env, cwd=work_dir, log_path=logs_dir / "compile.log")
+    _run(
+        ["ld.lld", "-m", "aicorelinux", "-Ttext=0", str(tmp_o), "-static", "-n", "-o", str(kernel_o)],
+        env=env,
+        cwd=work_dir,
+        log_path=logs_dir / "link.log",
+    )
     return kernel_o
 
 
@@ -227,7 +254,7 @@ if __name__ == "__main__":
 """,
         encoding="utf-8",
     )
-    _run([sys.executable, str(script)], env=env, cwd=work_dir)
+    _run([sys.executable, str(script)], env=env, cwd=work_dir, log_path=work_dir / "logs" / "camodel.log")
 
 
 def _compare_outputs(work_dir: Path, golden_path: Path, m: int, n: int) -> None:
@@ -244,7 +271,10 @@ def _compare_outputs(work_dir: Path, golden_path: Path, m: int, n: int) -> None:
     actual = np.fromfile(output_path, dtype=np.float16).reshape(m, n)
     expect = np.fromfile(golden_path, dtype=np.float16).reshape(m, n)
     np.testing.assert_allclose(actual, expect, rtol=1e-2, atol=1e-2)
-    print(f"CAModel output matches golden: {output_path}")
+    shutil.copy2(output_path, work_dir / "C_actual.bin")
+    message = f"CAModel output matches golden: {output_path}"
+    (work_dir / "logs" / "compare.log").write_text(message + "\n", encoding="utf-8")
+    print(message)
 
 
 def main() -> None:
@@ -264,22 +294,25 @@ def main() -> None:
     ascend_home = _find_ascend_home()
     env = _prepare_env(ascend_home)
 
-    if args.work_dir.exists():
-        shutil.rmtree(args.work_dir)
-    args.work_dir.mkdir(parents=True)
+    work_dir = args.work_dir.expanduser().resolve()
+    kernel_src = args.kernel_cpp.expanduser().resolve() if args.kernel_cpp is not None else None
 
-    kernel_cpp = args.work_dir / "main_kernel.cpp"
-    if args.kernel_cpp is None:
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+
+    kernel_cpp = work_dir / "main_kernel.cpp"
+    if kernel_src is None:
         _write_kernel(kernel_cpp, args.m, args.n, args.k)
     else:
-        _copy_kernel(args.kernel_cpp, kernel_cpp)
-    _, _, golden_path = _write_data(args.work_dir, args.m, args.n, args.k)
-    kernel_o = _compile_kernel(env, ascend_home, args.work_dir, kernel_cpp)
+        _copy_kernel(kernel_src, kernel_cpp)
+    _, _, golden_path = _write_data(work_dir, args.m, args.n, args.k)
+    kernel_o = _compile_kernel(env, ascend_home, work_dir, kernel_cpp)
     print(f"310P kernel object: {kernel_o}")
 
     if not args.skip_run:
-        _run_camodel_api(env, args.work_dir, kernel_o, args.m, args.n, args.k)
-        _compare_outputs(args.work_dir, golden_path, args.m, args.n)
+        _run_camodel_api(env, work_dir, kernel_o, args.m, args.n, args.k)
+        _compare_outputs(work_dir, golden_path, args.m, args.n)
 
 
 if __name__ == "__main__":
