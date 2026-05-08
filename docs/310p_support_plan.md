@@ -770,6 +770,8 @@ Risks:
   `torch_npu`.
 - The CPU twin shmem coverage is a debug fallback, not a production 310P
   runtime path.
+- `examples/shmem` and `examples/dispatch_combine` still require their external
+  Python/runtime wrappers to run directly as shipped.
 
 Exit criteria:
 
@@ -799,6 +801,13 @@ Completed changes:
   `src/tl_templates/ascend/common.h` so the CPU twin runner can validate
   `T.shmem_get_nbi`, `T.shmem_put_nbi`, `T.shmem_ub_get_nbi`, and
   `T.shmem_ub_put_nbi` precision behavior.
+- Added CPU-debug-only 310P fallback helpers in
+  `src/tl_templates/ascend/common.h` for the dispatch-combine-style
+  `ReduceSum` mask overload plus `GatherMask_experiment` and `Sum_experiment`.
+- Added CPU twin validation coverage for the dispatch-combine-style helper
+  chain via `example_dispatch_combine_experiments`,
+  `example_reduce_sum_mask_experiment`, and
+  `example_gathermask_sum_experiment`.
 
 Verification commands run:
 

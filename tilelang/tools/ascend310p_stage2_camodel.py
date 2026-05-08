@@ -25,6 +25,7 @@ DTYPE_TO_NUMPY = {
     "float": np.float32,
     "int32": np.int32,
     "int8": np.int8,
+    "uint32": np.uint32,
 }
 
 DTYPE_TO_ASCENDEBUG = {
@@ -33,6 +34,7 @@ DTYPE_TO_ASCENDEBUG = {
     "float": "float32",
     "int32": "int32",
     "int8": "int8",
+    "uint32": "uint32",
 }
 
 PASS_CONFIGS = {

@@ -412,6 +412,82 @@ def _example_shmem_ub_put_nbi_program():
     return main
 
 
+def _example_dispatch_combine_experiment_program():
+    n = 8
+
+    @T.prim_func
+    def main(
+        A: T.Tensor((1, n), "float32"),
+        B: T.Tensor((1, n), "float32"),
+        C: T.Tensor((1, n), "float32"),
+        D: T.Tensor((1,), "float32"),
+        E: T.Tensor((1, n), "float32"),
+    ):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            with T.Scope("V"):
+                a_ub = T.alloc_ub((1, n), "float32")
+                b_ub = T.alloc_ub((1, n), "float32")
+                sub_ub = T.alloc_ub((1, n), "float32")
+                abs_ub = T.alloc_ub((1, n), "float32")
+                min_ub = T.alloc_ub((1, n), "float32")
+                sum_ub = T.alloc_ub((1,), "float32")
+
+                T.copy(A, a_ub)
+                T.copy(B, b_ub)
+                T.tile.sub_experiment(sub_ub, a_ub, b_ub, n)
+                T.tile.abs_experiment(abs_ub, sub_ub, n)
+                T.tile.mins_experiment(min_ub, abs_ub, 2.5, n)
+                T.tile.reduce_sum_experiment(sum_ub, min_ub, n)
+                T.copy(abs_ub, C)
+                T.copy(sum_ub, D)
+                T.copy(min_ub, E)
+
+    return main
+
+
+def _example_reduce_sum_mask_experiment_program():
+    n = 8
+
+    @T.prim_func
+    def main(A: T.Tensor((1, n), "float32"), B: T.Tensor((1,), "float32")):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            with T.Scope("V"):
+                a_ub = T.alloc_ub((1, n), "float32")
+                b_ub = T.alloc_ub((1,), "float32")
+                T.copy(A, a_ub)
+                T.tile.reduce_sum_mask_experiment(b_ub, a_ub, 1, 1, 1)
+                T.copy(b_ub, B)
+
+    return main
+
+
+def _example_gathermask_sum_experiment_program():
+    n = 8
+
+    @T.prim_func
+    def main(
+        A: T.Tensor((1, n), "float32"),
+        P: T.Tensor((1,), "uint32"),
+        C: T.Tensor((1, n), "float32"),
+        D: T.Tensor((1,), "float32"),
+    ):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            with T.Scope("V"):
+                a_ub = T.alloc_ub((1, n), "float32")
+                p_ub = T.alloc_ub((1,), "uint32")
+                c_ub = T.alloc_ub((1, n), "float32")
+                d_ub = T.alloc_ub((1,), "float32")
+
+                T.copy(A, a_ub)
+                T.copy(P, p_ub)
+                T.tile.gathermask_experiment(c_ub, a_ub, p_ub, True, 2, [1, 1, 1, 0], 0)
+                T.tile.sum_experiment(d_ub, c_ub, [1, n, n])
+                T.copy(c_ub, C)
+                T.copy(d_ub, D)
+
+    return main
+
+
 def _make_online_softmax_data(work_dir: Path):
     rng = np.random.default_rng(10)
     a = rng.uniform(-4.0, 4.0, size=(1, 32)).astype(np.float32)
@@ -557,6 +633,68 @@ def _make_shmem_get_put_data(work_dir: Path):
     )
 
 
+def _make_dispatch_combine_experiment_data(work_dir: Path):
+    rng = np.random.default_rng(23)
+    a = rng.uniform(-4.0, 4.0, size=(1, 8)).astype(np.float32)
+    b = rng.uniform(-4.0, 4.0, size=(1, 8)).astype(np.float32)
+    sub = a - b
+    abs_out = np.abs(sub)
+    min_out = np.minimum(abs_out, np.float32(2.5))
+    sum_out = np.array([min_out.sum()], dtype=np.float32)
+    return (
+        {
+            "A": _write_array(work_dir / "A.bin", a),
+            "B": _write_array(work_dir / "B.bin", b),
+        },
+        {
+            "C": work_dir / "C_out.bin",
+            "D": work_dir / "D_out.bin",
+            "E": work_dir / "E_out.bin",
+        },
+        {
+            "C": _write_array(work_dir / "C_golden.bin", abs_out),
+            "D": _write_array(work_dir / "D_golden.bin", sum_out),
+            "E": _write_array(work_dir / "E_golden.bin", min_out),
+        },
+    )
+
+
+def _make_reduce_sum_mask_experiment_data(work_dir: Path):
+    rng = np.random.default_rng(24)
+    a = np.zeros((1, 8), dtype=np.float32)
+    a[0, 0] = rng.uniform(-4.0, 4.0)
+    b = np.array([a[0, 0]], dtype=np.float32)
+    return (
+        {"A": _write_array(work_dir / "A.bin", a)},
+        {"B": work_dir / "B_out.bin"},
+        {"B": _write_array(work_dir / "B_golden.bin", b)},
+    )
+
+
+def _make_gathermask_sum_experiment_data(work_dir: Path):
+    rng = np.random.default_rng(25)
+    a = np.zeros((1, 8), dtype=np.float32)
+    a[0, 1] = rng.uniform(-4.0, 4.0)
+    c = np.zeros((1, 8), dtype=np.float32)
+    c[0, 0] = a[0, 1]
+    d = np.array([a[0, 1]], dtype=np.float32)
+    p = np.array([2], dtype=np.uint32)
+    return (
+        {
+            "A": _write_array(work_dir / "A.bin", a),
+            "P": _write_array(work_dir / "P.bin", p),
+        },
+        {
+            "C": work_dir / "C_out.bin",
+            "D": work_dir / "D_out.bin",
+        },
+        {
+            "C": _write_array(work_dir / "C_golden.bin", c),
+            "D": _write_array(work_dir / "D_golden.bin", d),
+        },
+    )
+
+
 EXAMPLE_CASES = {
     "example_online_softmax": Stage2Case(
         name="example_online_softmax",
@@ -677,6 +815,46 @@ EXAMPLE_CASES = {
         inputs=(TensorSpec("A", "int8", (1, 16)),),
         outputs=(TensorSpec("B", "int8", (1, 16)),),
         make_data=_make_shmem_get_put_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_dispatch_combine_experiments": Stage2Case(
+        name="example_dispatch_combine_experiments",
+        program_factory=_example_dispatch_combine_experiment_program,
+        inputs=(
+            TensorSpec("A", "float32", (1, 8)),
+            TensorSpec("B", "float32", (1, 8)),
+        ),
+        outputs=(
+            TensorSpec("C", "float32", (1, 8)),
+            TensorSpec("D", "float32", (1,)),
+            TensorSpec("E", "float32", (1, 8)),
+        ),
+        make_data=_make_dispatch_combine_experiment_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_reduce_sum_mask_experiment": Stage2Case(
+        name="example_reduce_sum_mask_experiment",
+        program_factory=_example_reduce_sum_mask_experiment_program,
+        inputs=(TensorSpec("A", "float32", (1, 8)),),
+        outputs=(TensorSpec("B", "float32", (1,)),),
+        make_data=_make_reduce_sum_mask_experiment_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_gathermask_sum_experiment": Stage2Case(
+        name="example_gathermask_sum_experiment",
+        program_factory=_example_gathermask_sum_experiment_program,
+        inputs=(
+            TensorSpec("A", "float32", (1, 8)),
+            TensorSpec("P", "uint32", (1,)),
+        ),
+        outputs=(
+            TensorSpec("C", "float32", (1, 8)),
+            TensorSpec("D", "float32", (1,)),
+        ),
+        make_data=_make_gathermask_sum_experiment_data,
         rtol=1e-6,
         atol=1e-6,
     ),

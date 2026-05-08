@@ -37,6 +37,33 @@ struct alignas(2) bfloat16_t {
 #endif
 #endif
 
+#if defined(TL_ASCEND_310P) && \
+    (defined(ASCENDC_CPU_DEBUG) || defined(__CCE_KT_TEST__))
+namespace AscendC {
+template <typename T>
+CATLASS_DEVICE void ReduceSum(LocalTensor<T> dstTensor, LocalTensor<T> srcTensor,
+                              LocalTensor<uint8_t> sharedTmpBuffer,
+                              int32_t mask, int32_t repeatTime,
+                              int32_t srcRepStride) {
+  constexpr uint32_t kBlockElems = 32 / sizeof(T);
+  T acc = T(0);
+  for (int32_t repeat = 0; repeat < repeatTime; ++repeat) {
+    const uint32_t base = static_cast<uint32_t>(repeat * srcRepStride * kBlockElems);
+    for (uint32_t lane = 0; lane < kBlockElems; ++lane) {
+      if (mask & (1 << lane)) {
+        acc = static_cast<T>(acc + srcTensor.GetValue(base + lane));
+      }
+    }
+  }
+  dstTensor.SetValue(0, acc);
+  for (uint32_t i = 1; i < dstTensor.GetSize(); ++i) {
+    dstTensor.SetValue(i, T(0));
+  }
+  (void)sharedTmpBuffer;
+}
+}  // namespace AscendC
+#endif
+
 #if !defined(TL_ASCEND_310P)
 #include "shmem.h"
 #endif
@@ -1330,6 +1357,27 @@ GatherMask_experiment(const LocalTensor<T> &dst, const LocalTensor<T> &src0,
                       const uint32_t mask, const uint32_t src0BlockStride,
                       const uint32_t repeatTimes, uint32_t src0RepeatStride,
                       const uint32_t src1RepeatStride, uint64_t rsvdCnt) {
+#if defined(TL_ASCEND_310P) && \
+    (defined(ASCENDC_CPU_DEBUG) || defined(__CCE_KT_TEST__))
+  constexpr uint32_t kBlockElems = 32 / sizeof(T);
+  uint32_t outIndex = 0;
+  for (uint32_t repeat = 0; repeat < repeatTimes; ++repeat) {
+    const uint32_t base = repeat * src0RepeatStride * kBlockElems;
+    for (uint32_t lane = 0; lane < kBlockElems; ++lane) {
+      if (mask & (1u << lane)) {
+        dst.SetValue(outIndex++, src0.GetValue(base + lane));
+      }
+    }
+  }
+  for (uint32_t i = outIndex; i < dst.GetSize(); ++i) {
+    dst.SetValue(i, T(0));
+  }
+  (void)src1Pattern;
+  (void)reduceMode;
+  (void)src0BlockStride;
+  (void)src1RepeatStride;
+  (void)rsvdCnt;
+#else
   GatherMaskParams gatherMaskParams;
   gatherMaskParams.repeatTimes = repeatTimes;
   gatherMaskParams.src0BlockStride = src0BlockStride;
@@ -1337,6 +1385,7 @@ GatherMask_experiment(const LocalTensor<T> &dst, const LocalTensor<T> &src0,
   gatherMaskParams.src1RepeatStride = src1RepeatStride;
   GatherMask(dst, src0, src1Pattern, reduceMode, mask, gatherMaskParams,
              rsvdCnt);
+#endif
 }
 
 template <typename T>
@@ -1353,11 +1402,25 @@ template <typename T>
 CATLASS_DEVICE void
 Sum_experiment(const LocalTensor<T> &dst, const LocalTensor<T> &src,
                const uint32_t outter, const uint32_t inner, const uint32_t n) {
+#if defined(TL_ASCEND_310P) && \
+    (defined(ASCENDC_CPU_DEBUG) || defined(__CCE_KT_TEST__))
+  for (uint32_t row = 0; row < outter; ++row) {
+    T acc = T(0);
+    for (uint32_t col = 0; col < n; ++col) {
+      acc = static_cast<T>(acc + src.GetValue(row * inner + col));
+    }
+    dst.SetValue(row, acc);
+  }
+  for (uint32_t i = outter; i < dst.GetSize(); ++i) {
+    dst.SetValue(i, T(0));
+  }
+#else
   SumParams sumParams;
   sumParams.outter = outter;
   sumParams.inner = inner;
   sumParams.n = n;
   AscendC::Sum(dst, src, sumParams);
+#endif
 }
 
 template <typename T, uint32_t M, uint32_t N>
