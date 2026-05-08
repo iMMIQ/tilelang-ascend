@@ -36,6 +36,10 @@ NO_AUTO_SYNC_PASS_CONFIGS = {
 NO_AUTO_SYNC_CASES = {
     "example_flash_attention_example_style",
     "example_gemm_310p_small",
+    "example_shmem_get_nbi",
+    "example_shmem_put_nbi",
+    "example_shmem_ub_get_nbi",
+    "example_shmem_ub_put_nbi",
 }
 
 
@@ -356,6 +360,58 @@ def _example_copy_roundtrip_program():
     return main
 
 
+def _example_shmem_get_nbi_program():
+    m = 1
+    n = 16
+
+    @T.prim_func
+    def main(A: T.Tensor((m, n), "int8"), B: T.Tensor((m, n), "int8")):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            T.shmem_get_nbi(B, A, m * n, 0)
+
+    return main
+
+
+def _example_shmem_put_nbi_program():
+    m = 1
+    n = 16
+
+    @T.prim_func
+    def main(A: T.Tensor((m, n), "int8"), B: T.Tensor((m, n), "int8")):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            T.shmem_put_nbi(B, A, m * n, 0)
+
+    return main
+
+
+def _example_shmem_ub_get_nbi_program():
+    m = 1
+    n = 16
+
+    @T.prim_func
+    def main(A: T.Tensor((m, n), "int8"), B: T.Tensor((m, n), "int8")):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            a_ub = T.alloc_ub((m, n), "int8")
+            T.shmem_ub_get_nbi(a_ub, A, m * n, 0)
+            T.copy(a_ub, B)
+
+    return main
+
+
+def _example_shmem_ub_put_nbi_program():
+    m = 1
+    n = 16
+
+    @T.prim_func
+    def main(A: T.Tensor((m, n), "int8"), B: T.Tensor((m, n), "int8")):
+        with T.Kernel(1, is_npu=True) as (cid, vid):
+            a_ub = T.alloc_ub((m, n), "int8")
+            T.copy(A, a_ub)
+            T.shmem_ub_put_nbi(a_ub, B, m * n, 0, 0)
+
+    return main
+
+
 def _make_online_softmax_data(work_dir: Path):
     rng = np.random.default_rng(10)
     a = rng.uniform(-4.0, 4.0, size=(1, 32)).astype(np.float32)
@@ -491,6 +547,16 @@ def _make_copy_roundtrip_data(work_dir: Path):
     )
 
 
+def _make_shmem_get_put_data(work_dir: Path):
+    rng = np.random.default_rng(17)
+    a = rng.integers(-128, 127, size=(1, 16), dtype=np.int8)
+    return (
+        {"A": _write_array(work_dir / "A.bin", a)},
+        {"B": work_dir / "B_out.bin"},
+        {"B": _write_array(work_dir / "B_golden.bin", a)},
+    )
+
+
 EXAMPLE_CASES = {
     "example_online_softmax": Stage2Case(
         name="example_online_softmax",
@@ -575,6 +641,42 @@ EXAMPLE_CASES = {
         inputs=(TensorSpec("A", "float16", (16, 16)),),
         outputs=(TensorSpec("B", "float16", (16, 16)),),
         make_data=_make_copy_roundtrip_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_shmem_get_nbi": Stage2Case(
+        name="example_shmem_get_nbi",
+        program_factory=_example_shmem_get_nbi_program,
+        inputs=(TensorSpec("A", "int8", (1, 16)),),
+        outputs=(TensorSpec("B", "int8", (1, 16)),),
+        make_data=_make_shmem_get_put_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_shmem_put_nbi": Stage2Case(
+        name="example_shmem_put_nbi",
+        program_factory=_example_shmem_put_nbi_program,
+        inputs=(TensorSpec("A", "int8", (1, 16)),),
+        outputs=(TensorSpec("B", "int8", (1, 16)),),
+        make_data=_make_shmem_get_put_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_shmem_ub_get_nbi": Stage2Case(
+        name="example_shmem_ub_get_nbi",
+        program_factory=_example_shmem_ub_get_nbi_program,
+        inputs=(TensorSpec("A", "int8", (1, 16)),),
+        outputs=(TensorSpec("B", "int8", (1, 16)),),
+        make_data=_make_shmem_get_put_data,
+        rtol=1e-6,
+        atol=1e-6,
+    ),
+    "example_shmem_ub_put_nbi": Stage2Case(
+        name="example_shmem_ub_put_nbi",
+        program_factory=_example_shmem_ub_put_nbi_program,
+        inputs=(TensorSpec("A", "int8", (1, 16)),),
+        outputs=(TensorSpec("B", "int8", (1, 16)),),
+        make_data=_make_shmem_get_put_data,
         rtol=1e-6,
         atol=1e-6,
     ),

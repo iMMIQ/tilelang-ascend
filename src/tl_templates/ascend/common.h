@@ -375,7 +375,48 @@ CATLASS_DEVICE void elementwise_binary(LocalTensor<T> const &ubIn0,
   }
 }
 
-#if !defined(TL_ASCEND_310P)
+#if defined(TL_ASCEND_310P) && \
+    (defined(ASCENDC_CPU_DEBUG) || defined(__CCE_KT_TEST__))
+template <typename T>
+CATLASS_DEVICE void shmem_put_nbi(const GlobalTensor<T> &output,
+                                  const GlobalTensor<T> &input, size_t nelems,
+                                  size_t newPe) {
+  (void)newPe;
+  for (size_t i = 0; i < nelems; ++i) {
+    const_cast<GlobalTensor<T> &>(output).SetValue(i, input.GetValue(i));
+  }
+}
+
+template <typename T>
+CATLASS_DEVICE void shmem_ub_put_nbi(const LocalTensor<T> &ubTensor,
+                                     const GlobalTensor<T> &output,
+                                     size_t nelems, int newPe, int strelem) {
+  (void)newPe;
+  for (size_t i = 0; i < nelems; ++i) {
+    const_cast<GlobalTensor<T> &>(output).SetValue(strelem + i, ubTensor.GetValue(i));
+  }
+}
+
+template <typename T>
+CATLASS_DEVICE void shmem_get_nbi(const GlobalTensor<T> &output,
+                                  const GlobalTensor<T> &input, size_t nelems,
+                                  size_t newPe) {
+  (void)newPe;
+  for (size_t i = 0; i < nelems; ++i) {
+    const_cast<GlobalTensor<T> &>(output).SetValue(i, input.GetValue(i));
+  }
+}
+
+template <typename T>
+CATLASS_DEVICE void shmem_ub_get_nbi(const LocalTensor<T> &output,
+                                     const GlobalTensor<T> &input,
+                                     size_t nelems, size_t newPe) {
+  (void)newPe;
+  for (size_t i = 0; i < nelems; ++i) {
+    const_cast<LocalTensor<T> &>(output).SetValue(i, input.GetValue(i));
+  }
+}
+#elif !defined(TL_ASCEND_310P)
 template <typename T>
 CATLASS_DEVICE void shmem_put_nbi(const GlobalTensor<T> &output,
                                   const GlobalTensor<T> &input, size_t nelems,

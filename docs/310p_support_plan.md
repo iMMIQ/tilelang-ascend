@@ -750,9 +750,10 @@ Notes:
 ### Stage 8: MoE, Shared Memory, and Integration Examples
 
 Status: complete for 310P MoE and aclgraph integration-shape lower/compile
-coverage; shmem, dispatch-combine, and torch integration examples are
-explicitly documented as unavailable on this CAModel machine unless their
-external runtime dependencies are installed and a 310P shmem path is added.
+coverage; shmem, dispatch-combine, and torch integration examples remain
+runtime-dependent. The tree now also has a CPU-debug-only 310P fallback path
+that lets the CPU twin runner validate `T.shmem_*` precision behavior, but it
+is not a real 310P SHMEM runtime implementation.
 
 Directories:
 
@@ -764,10 +765,11 @@ Directories:
 
 Risks:
 
-- `shmem` is currently excluded under `TL_ASCEND_310P` in `common.h`.
 - `dispatch_combine` depends on shmem and experimental tile APIs.
 - `torch_tl_ascend` requires broader runtime integration and likely needs
   `torch_npu`.
+- The CPU twin shmem coverage is a debug fallback, not a production 310P
+  runtime path.
 
 Exit criteria:
 
@@ -791,9 +793,12 @@ Completed changes:
   reduction, vector arithmetic, RoPE mask construction, reinterpret cast,
   broadcast, `T.tile.gather`, and final GM output copy.
 - Added an explicit local dependency report for integration-only examples:
-  `torch_npu` is missing on this machine, `shmem` is missing, and
-  `TL_ASCEND_310P` currently excludes shmem helper definitions in
-  `src/tl_templates/ascend/common.h`.
+  `torch_npu` is missing on this machine, and the real 310P SHMEM runtime path
+  still depends on external shmem support.
+- Added CPU-debug-only 310P fallback helpers in
+  `src/tl_templates/ascend/common.h` so the CPU twin runner can validate
+  `T.shmem_get_nbi`, `T.shmem_put_nbi`, `T.shmem_ub_get_nbi`, and
+  `T.shmem_ub_put_nbi` precision behavior.
 
 Verification commands run:
 
@@ -810,10 +815,10 @@ Notes:
 - Stage 8 is deliberately split between supported compile coverage and
   documented dependency gaps. The local machine cannot validate
   `examples/torch_tl_ascend` because `torch_npu` is unavailable.
-- `examples/shmem` and `examples/dispatch_combine` remain unsupported for 310P
-  in this tree because the common template excludes shmem helpers under
-  `TL_ASCEND_310P`; adding a real 310P shmem implementation should be tracked as
-  a separate runtime integration milestone.
+- `examples/shmem` and `examples/dispatch_combine` still need a real 310P
+  SHMEM runtime path before they can be claimed as supported end to end.
+- The current CPU twin shmem coverage is sufficient for precision validation,
+  but it does not replace the actual 310P runtime integration work.
 
 ## Remaining Follow-Up
 
@@ -831,8 +836,8 @@ a new stage in this plan; it is runtime closure for the known blockers:
    prove lower/compile legality for cross-scope and attention-shaped kernels,
    but the local helper executes one selected core branch offline.
 3. Add or enable 310P shmem support before claiming `examples/shmem` and
-   `examples/dispatch_combine` runtime support. The current template excludes
-   shmem helpers under `TL_ASCEND_310P`.
+   `examples/dispatch_combine` runtime support. The current tree only provides
+   a CPU-debug fallback for `T.shmem_*`.
 4. Install `torch_npu`/NPU runtime dependencies before validating
    `examples/torch_tl_ascend` and original runtime JIT example scripts on this
    machine.
