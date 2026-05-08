@@ -81,6 +81,10 @@ build_sdist/
 # exclude debug testing folder
 !testing/python/debug
 debug_310p*/
+debug_run*/
+debug_src*/
+debug_tmp*/
+debug_size*/
 
 # ignore lib with develop mode
 tilelang/lib
@@ -101,4 +105,3 @@ examples/torch_tl_ascend/demo_libtorch/lib/*.so
 
 docs/notebook/*.so
 docs/notebook/*.cpp
-

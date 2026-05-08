@@ -1,4 +1,16 @@
+#include <cstdint>
+
+#if defined(ASCENDC_CPU_DEBUG) || defined(__CCE_KT_TEST__)
+#ifndef CATLASS_DETAIL_MACROS_HPP
+#define CATLASS_DETAIL_MACROS_HPP
+#define CATLASS_DEVICE inline
+#define CATLASS_HOST_DEVICE inline
+#define CATLASS_GLOBAL
+#endif
+#endif
+
 #if defined(TL_ASCEND_310P) && defined(__CCE_AICORE__) && \
+    !defined(ASCENDC_CPU_DEBUG) && !defined(__CCE_KT_TEST__) && \
     !defined(TL_ASCEND_BFLOAT16_T_DEFINED)
 #define TL_ASCEND_BFLOAT16_T_DEFINED
 struct alignas(2) bfloat16_t {
@@ -527,10 +539,10 @@ CATLASS_DEVICE T reduce_scalar_max_safe(T lhsValue, T rhsValue) {
   }
 }
 
-template <typename T, uint32_t M, uint32_t N, int32_t dim>
+template <typename T, uint32_t M, uint32_t N, int32_t dim, typename TmpT>
 CATLASS_DEVICE void
 reduce_max(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
-           LocalTensor<uint8_t> const &sharedTmpBuffer, bool clear = true) {
+           LocalTensor<TmpT> const &sharedTmpBuffer, bool clear = true) {
 #if defined(TL_ASCEND_310P)
   if (clear) {
     if constexpr (dim == -1) {
@@ -563,14 +575,15 @@ reduce_max(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
   }
   (void)sharedTmpBuffer;
 #else
+  auto sharedTmpBufferU8 = sharedTmpBuffer.template ReinterpretCast<uint8_t>();
   uint32_t shape[] = {M, N};
   if (clear) {
     if constexpr (dim == -1) {
       AscendC::ReduceMax<T, AscendC::Pattern::Reduce::AR>(
-          dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+          dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
     } else {
       AscendC::ReduceMax<T, AscendC::Pattern::Reduce::RA>(
-          dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+          dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
     }
     return;
   }
@@ -586,10 +599,10 @@ reduce_max(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
 
   if constexpr (dim == -1) {
     AscendC::ReduceMax<T, AscendC::Pattern::Reduce::AR>(
-        dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+        dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
   } else {
     AscendC::ReduceMax<T, AscendC::Pattern::Reduce::RA>(
-        dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+        dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
   }
 
   // Keep the merge explicit instead of relying on an in-place vector max,
@@ -615,10 +628,10 @@ CATLASS_DEVICE T reduce_scalar_min_safe(T lhsValue, T rhsValue) {
   }
 }
 
-template <typename T, uint32_t M, uint32_t N, int32_t dim>
+template <typename T, uint32_t M, uint32_t N, int32_t dim, typename TmpT>
 CATLASS_DEVICE void
 reduce_min(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
-           LocalTensor<uint8_t> const &sharedTmpBuffer, bool clear = true) {
+           LocalTensor<TmpT> const &sharedTmpBuffer, bool clear = true) {
 #if defined(TL_ASCEND_310P)
   if (clear) {
     if constexpr (dim == -1) {
@@ -651,14 +664,15 @@ reduce_min(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
   }
   (void)sharedTmpBuffer;
 #else
+  auto sharedTmpBufferU8 = sharedTmpBuffer.template ReinterpretCast<uint8_t>();
   uint32_t shape[] = {M, N};
   if (clear) {
     if constexpr (dim == -1) {
       AscendC::ReduceMin<T, AscendC::Pattern::Reduce::AR>(
-          dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+          dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
     } else {
       AscendC::ReduceMin<T, AscendC::Pattern::Reduce::RA>(
-          dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+          dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
     }
     return;
   }
@@ -674,10 +688,10 @@ reduce_min(LocalTensor<T> const &dstTensor, LocalTensor<T> const &srcTensor,
 
   if constexpr (dim == -1) {
     AscendC::ReduceMin<T, AscendC::Pattern::Reduce::AR>(
-        dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+        dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
   } else {
     AscendC::ReduceMin<T, AscendC::Pattern::Reduce::RA>(
-        dstTensor, srcTensor, sharedTmpBuffer, shape, true);
+        dstTensor, srcTensor, sharedTmpBufferU8, shape, true);
   }
 
   // Keep the merge explicit instead of relying on an in-place vector min,
@@ -724,8 +738,10 @@ gemm_v0(LocalTensor<T1> const &A, LocalTensor<T1> const &B,
 
   SetFlag<HardEvent::MTE2_MTE1>(L0AB_EVENT);
   WaitFlag<HardEvent::MTE2_MTE1>(L0AB_EVENT);
+#if !defined(ASCENDC_CPU_DEBUG) && !defined(__CCE_KT_TEST__)
   SetFlag<HardEvent::FIX_M>(L0AB_EVENT);
   WaitFlag<HardEvent::FIX_M>(L0AB_EVENT);
+#endif
 
   SetFlag<HardEvent::M_MTE1>(L0AB_EVENT);
   SetFlag<HardEvent::M_MTE1>(L0AB_EVENT + 1);
@@ -765,8 +781,10 @@ gemm_v0(LocalTensor<T1> const &A, LocalTensor<T1> const &B,
 
   SetFlag<HardEvent::MTE1_MTE2>(L0AB_EVENT);
   WaitFlag<HardEvent::MTE1_MTE2>(L0AB_EVENT);
+#if !defined(ASCENDC_CPU_DEBUG) && !defined(__CCE_KT_TEST__)
   SetFlag<HardEvent::M_FIX>(L0AB_EVENT);
   WaitFlag<HardEvent::M_FIX>(L0AB_EVENT);
+#endif
 #endif
 }
 
@@ -974,8 +992,10 @@ CATLASS_DEVICE void gemmL1(LocalTensor<T1> A, LocalTensor<T1> B,
 
       AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(0);
       AscendC::SetFlag<AscendC::HardEvent::M_MTE2>(0);
+#if !defined(ASCENDC_CPU_DEBUG) && !defined(__CCE_KT_TEST__)
       AscendC::SetFlag<AscendC::HardEvent::M_FIX>(0);
       AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(0);
+#endif
 
       copy_l0c_to_gm<T1, T2, LayoutGM, baseM, baseN, M, N>(
           C[loopM * baseM * N + loopN * baseN], C2, enable_relu);

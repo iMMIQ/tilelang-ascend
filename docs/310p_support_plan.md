@@ -33,6 +33,68 @@ Stage 0 is complete. `tilelang/tools/ascend310p_gemm_camodel.py` now normalizes
 relative and absolute `--work-dir` and `--kernel-cpp` paths, writes deterministic
 debug artifacts, and captures compile/link/CAModel/compare logs under `logs/`.
 
+### Ascendebug CPU Twin
+
+The repository now also has a reusable 310P CPU twin precision runner:
+
+```bash
+python3 tilelang/tools/ascend310p_stage2_cpu_twin.py \
+  --case activation_silu \
+  --work-dir debug_310p_stage2_cpu_twin
+```
+
+This path uses `ascendebug`'s `run_call_kernel_cpu` flow for 310P Ascend C
+source and is intended for precision validation without the PTO path. The
+`activation_silu` example has been verified against its golden output.
+
+Additional example validations completed with the same CPU twin path:
+
+- `examples/softmax/example_online_softmax.py` as `example_online_softmax`
+- `examples/normalization/rms_norm.py` as `example_rms_norm_streaming`
+- `examples/gemv/example_gemv_v.py` as `example_gemv_vector`
+- `examples/gemm/example_gemm_310p.py` as `example_gemm_310p_small`
+- L1 copy roundtrip as `example_copy_roundtrip`
+- `examples/flash_attention/flash_attn_bhsd.py` as `example_flash_attention_shape`
+- `examples/flash_attention/flash_attn_bhsd.py` as
+  `example_flash_attention_example_style` through CPU-twin-safe source
+  normalization
+
+These were validated with reduced 310P-friendly shapes while preserving the
+core compute pattern of each example.
+The example-style flash-attention CPU twin path currently elides cross-core
+debug events and disables auto sync during lowering so that the math can be
+validated without the mixed-core runtime blocker.
+
+Current CPU twin diagnostic conclusion:
+
+- GM-to-L1 and L1-to-GM copies are correct in the CPU twin roundtrip case.
+- 16x16 `T.gemm_v0` with explicit L1 inputs and L0C output matches golden in
+  CPU twin.
+- Example-style FlashAttention with QK GEMM, softmax, PV GEMM, and workspace
+  writes matches golden in CPU twin after CPU-debug-safe cross-core event
+  normalization.
+- Therefore the remaining precision-risk gap is not basic copy or CPU twin math;
+  it is the non-CPU CAModel/runtime handling of optimized cube GEMM, mixed-core
+  C/V execution, and auto-sync events.
+
+Recent verification commands:
+
+```bash
+python3 -m py_compile tilelang/tools/ascend310p_stage2_cpu_twin.py
+
+python3 tilelang/tools/ascend310p_stage2_cpu_twin.py \
+  --case example_copy_roundtrip \
+  --work-dir debug_310p_cpu_twin_copy_roundtrip
+
+python3 tilelang/tools/ascend310p_stage2_cpu_twin.py \
+  --case example_gemm_310p_small \
+  --work-dir debug_310p_cpu_twin_gemm_small
+
+python3 tilelang/tools/ascend310p_stage2_cpu_twin.py \
+  --case example_flash_attention_example_style \
+  --work-dir debug_310p_cpu_twin_fa_example_style
+```
+
 ### TileLang 310P Progress
 
 The following pieces already exist:
@@ -761,7 +823,10 @@ a new stage in this plan; it is runtime closure for the known blockers:
 
 1. Close the optimized cube `T.gemm_v0` CAModel runtime issue. The generated
    128x128x64 cube source compiles for 310P, but CAModel execution still returns
-   incorrect fixed output and reports never-ending instructions.
+   incorrect fixed output and reports never-ending instructions. The same
+   16x16 L1/L0C GEMM pattern now matches golden in CPU twin, so the remaining
+   fix is in CAModel/runtime-visible cube writeback/load/event semantics rather
+   than basic host-side precision math.
 2. Add a real mixed-core C/V CAModel runtime path. Stages 6 and 7 currently
    prove lower/compile legality for cross-scope and attention-shaped kernels,
    but the local helper executes one selected core branch offline.
@@ -771,3 +836,8 @@ a new stage in this plan; it is runtime closure for the known blockers:
 4. Install `torch_npu`/NPU runtime dependencies before validating
    `examples/torch_tl_ascend` and original runtime JIT example scripts on this
    machine.
+5. Convert the reduced CPU twin examples into direct example-entry validation
+   where possible. The current runner intentionally uses 310P-friendly reduced
+   shapes and CPU-debug-safe source normalization; full "examples exactly as
+   written" support requires preserving each example's original pass configs,
+   shapes, dynamic arguments, and workspace contracts.
